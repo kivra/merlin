@@ -1,286 +1,676 @@
 -module(merlin).
 
--type ast() :: erl_syntax:syntaxTree().
+-include("log.hrl").
 
--type phase() :: enter | node | exit.
+-export([
+    annotate/1,
+    annotate/2,
+    analyze/1,
+    analyze/2,
+    transform/3,
+    revert/1,
+    return/1
+]).
 
--type transformer(Extra) :: fun(
-    (phase(), ast(), Extra) ->
-        ast() | {ast(), Extra} |
-        continue | {continue, ast()} | {continue, ast(), Extra} |
-        return   | {return,   ast()} | {return,   ast(), Extra} |
-        delete   | {delete,   Extra} |
-        {error,   term()} | {error,   term(), Extra} |
-        {warning, term()} | {warning, term(), Extra}
-).
+-export_type([
+    action/0,
+    ast/0,
+    error_marker/0,
+    phase/0,
+    transformer/1,
+    transformer_return/1
+]).
+
+-define(else, true).
+
 
 -record(state, {
     file :: string(),
     module :: module(),
     transformer :: transformer(Extra),
-    extra :: Extra
+    extra :: Extra,
+    errors = [] :: [error_marker()],
+    warnings = [] :: [warning_marker()],
+    depth = 0 :: integer()
 }).
 
--export([
-    with_binding/3,
-    get_attribute/3,
-    get_bindings/1,
-    get_bindings/2,
-    transform/3
-]).
+-type error_marker() :: exception_marker(error).
+-type warning_marker() :: exception_marker(warning).
+
+%% {Type, {File, {Position, Module, Reason}}}.
+-type exception_marker(Type) :: { Type, marker() }.
+
+-type marker() ::
+    { File :: string(),
+        { Position :: erl_anno:location()
+        , Module :: module()
+        , Reason :: term()
+        }
+    }.
+
+-type phase() :: enter | node | exit.
+
+-type ast() :: erl_syntax:syntaxTree().
+
+-type action() :: continue | delete | return | exceptions.
+
+-type transformer_return(Extra) ::
+    ast() | {ast(), Extra} |
+    continue | {continue, ast()} | {continue, ast(), Extra} |
+    return   | {return,   ast()} | {return,   ast(), Extra} |
+    delete   | {delete,   Extra} |
+    {error,   term()} | {error,   term(), Extra} |
+    {warning, term()} | {warning, term(), ast()} | {warning, term(), ast(), Extra} |
+    {exceptions, [{error | warning, term()}], ast(), Extra}.
+
+-type transformer(Extra) :: fun(
+    (phase(), ast(), Extra) -> transformer_return(Extra)
+).
+
+-type analysis() :: #{
+    attributes := #{
+        spec => #{atom() => ast()},
+        type => #{atom() => ast()},
+        atom() => [ast()]
+    },
+    exports := [function_name()],
+    file := string(),
+    functions := [{atom(), pos_integer()}],
+    imports := #{ module() => [function_name()]},
+    module_imports := [module()],
+    records := map(),
+    errors | module | warnings => _
+}.
+
+-type function_name() :: atom() | {atom(), pos_integer()} | {module(), atom()}.
 
 %%% @doc Transforms the given `Forms' using the given `Transformer' with the
-%%%      given `State'.
+%%% given `State'.
 %%%
-%%%      This is done through three phases:
-%%%      1, When you `enter' a subtree
-%%%      2, When you encounter a leaf `node'
-%%%      3, When you `exit' a subtree
+%%% This is done through three phases:
+%%% 1, When you `enter' a subtree
+%%% 2, When you encounter a leaf `node'
+%%% 3, When you `exit' a subtree
 %%%
-%%%      It's recommended to have a match-all clause to future proof your code.
--spec transform(ast(), transformer(Extra), Extra) -> {ast(), Extra}.
+%%% It's recommended to have a match-all clause to future proof your code.
+% -spec transform(ast(), transformer(Extra), Extra) -> {Transformation, Extra}
+% when
+%     Transformation :: ast() | {warning, ast(), [term()]} | {error, [term()], [term()]}.
 transform(Forms, Transformer, Extra) when is_function(Transformer, 3) ->
-    File = case get_attribute(Forms, file, undefined) of
-        undefined -> "undefined";
-        [FileAttribute|_] -> erl_syntax:string_value(FileAttribute)
-    end,
-    Module = case get_attribute(Forms, module, undefined) of
-        undefined -> undefined;
-        [ModuleAttribute|_] -> erl_syntax:atom_value(ModuleAttribute)
-    end,
     InternalState = #state{
-        file=File,
-        module=Module,
+        file=merlin_lib:file(Forms),
+        module=merlin_lib:module(Forms),
         transformer=Transformer,
         extra=Extra
     },
-    {TransformedTree, FinalState} = transform_internal(Forms, InternalState),
-    ErrorsAndWarnings = extract_errors_and_warnings(TransformedTree, {[], []}),
-    JustForms = filter(TransformedTree, fun not_errors_or_warnings/1),
-    FinalTree = case ErrorsAndWarnings of
-        {[], []} -> JustForms;
-        {[], Warnings} -> {warnings, JustForms, Warnings};
-        {Errors, Warnings} -> {error, Errors, Warnings}
-    end,
+    logger:update_process_metadata(#{
+        target => #{
+            file => InternalState#state.file,
+            line => none,
+            module => InternalState#state.module,
+            tranasformer => merlin_lib:fun_to_mfa(Transformer)
+        }
+    }),
+    ?notice(
+        "Transforming using ~s:~s/~p",
+        tuple_to_list(merlin_lib:fun_to_mfa(Transformer))
+    ),
+    ?show(Forms),
+    {TransformedTree, FinalState} = try
+            transform_internal(Forms, InternalState)
+        catch
+            throw:Reason:Stacktrace ->
+                %% compile:foldl_transform/3 uses a `catch F(...)` when calling parse
+                %% transforms. Unfortuntely this means `throw`n errors turns into
+                %% normal values.
+                ?log_exception(throw, Reason, Stacktrace),
+                erlang:raise(error, Reason, Stacktrace);
+            Class:Reason:Stacktrace ->
+                ?log_exception(Class, Reason, Stacktrace),
+                erlang:raise(Class, Reason, Stacktrace)
+        end,
+    ?info("Final state ~tp", [FinalState#state.extra]),
+    FinalTree = finalize(TransformedTree, FinalState),
+    ?show(FinalTree),
     {FinalTree, FinalState#state.extra}.
 
 %%% @private
 -spec transform_internal(ast(), #state{}) -> {ast(), #state{}}.
-transform_internal(Forms, State) when is_list(Forms) ->
-    lists:mapfoldl(fun transform_internal/2, State, Forms);
-transform_internal(delete, State) ->
-    {delete, State};
-transform_internal(Form, #state{} = State0) ->
+transform_internal(Forms0, State0) when is_list(Forms0) ->
+    lists:mapfoldl(fun transform_internal/2, State0, Forms0);
+transform_internal(Form, State0) ->
+    set_target_mfa(Form, State0),
+    State1 = update_file(Form, State0),
     case erl_syntax:is_leaf(Form) of
         true ->
-            {_Action, Node1, State1} = call_transformer(node, Form, State0),
+            {_Action, Node1, State2} = call_transformer(node, Form, State1),
             %% Here, at the leaf node, the action does not matter, as we're not
             %% recursing anymore.
-            {Node1, State1};
+            {Node1, State2};
         false ->
-            {Action0, Tree1, State1} = call_transformer(enter, Form, State0),
+            {Action0, Tree1, State2} = call_transformer(enter, Form, State1),
             case Action0 of
                 continue ->
-                    {Tree2, State2} = erl_syntax_lib:mapfold_subtrees(
-                        fun transform_internal/2, State1, Tree1
+                    State3 = increment_depth(State2),
+                    {Tree2, State4} = mapfold_subtrees(
+                        fun transform_internal/2, State3, Tree1
                     ),
-                    Tree3 = filter_subtree(Tree2, fun not_deleted/1),
-                    {_Action1, Tree4, State3} = call_transformer(
-                        exit, Tree3, State2
+                    State5 = decrement_depth(State4),
+                    {_Action1, Tree3, State6} = call_transformer(
+                        exit, Tree2, State5
                     ),
-                    %% Like with the lef node, we're not recursing here so
+                    %% Like with the leaf node, we're not recursing here so
                     %% just return whatever result we've got.
-                    {Tree4, State3};
-                _ -> {Tree1, State1}
+                    {Tree3, State6};
+                return ->
+                    {Tree1, State2}
             end
     end.
 
+update_file(Form, State) ->
+    case get_file_attribute(Form) of
+        false   -> State;
+        NewFile ->
+            ?info("Changing file ~s", [NewFile]),
+            set_logger_target(file, NewFile),
+            State#state{file = NewFile}
+    end.
+
+set_target_mfa(Node, #state{module=Module}) ->
+    case erl_syntax:type(Node) of
+        function ->
+            Name = merlin_lib:value(erl_syntax:function_name(Node)),
+            Arity = erl_syntax:function_arity(Node),
+            set_logger_target(mfa, {Module, Name, Arity});
+        _ -> ok
+    end.
+
+increment_depth(#state{depth=Depth} = State) ->
+    set_logger_target(indent, lists:duplicate(Depth+1, "    ")),
+    State#state{depth=Depth+1}.
+
+decrement_depth(#state{depth=1} = State) ->
+    unset_logger_target(indent),
+    State#state{depth=0};
+decrement_depth(#state{depth=Depth} = State) ->
+    set_logger_target(indent, lists:duplicate(Depth-1, "    ")),
+    State#state{depth=Depth-1}.
+
+get_file_attribute(Form) ->
+    case erl_syntax:type(Form) of
+        file ->
+            case erl_syntax:atom_value(erl_syntax:attribute_name(Form)) of
+                file ->
+                    [Filename, _Line] = erl_syntax:attribute_arguments(Form),
+                    erl_syntax:string_value(Filename);
+                _ ->
+                    false
+            end;
+        _ -> false
+    end.
+
+% -spec mapfold_subtrees(Fun, #state{}, ast() | [ast()]) -> {#state{}, [ast()]} when
+%     Fun :: fun((ast(), #state{}) -> {ast(), #state{}}).
+mapfold_subtrees(Fun, State0, Tree0) ->
+    case erl_syntax:subtrees(Tree0) of
+        [] ->
+            {Tree0, State0};
+        Groups0 ->
+            {Groups1, State1} = erl_syntax_lib:mapfoldl_listlist(
+                Fun, State0, Groups0
+            ),
+            Groups2 = lists:map(fun lists:flatten/1, Groups1),
+            Tree1 = erl_syntax:update_tree(Tree0, Groups2),
+            {Tree1, State1}
+    end.
+
+%%% @private
+%%% @doc Calls the user transformer and heavely normalizes its return value.
+%%%
+%%% The transformer may return many different tuples prefixed with 5
+%%% different actions. This reduces that to just 2 actions and folds the
+%%% returned updated nodes/errors/warnings into our internal state.
+-spec call_transformer(phase(), ast(), #state{}) -> {Action, Tree, #state{}}
+when
+    Action :: continue | return,
+    Tree :: ast(). %% erl_syntax:form_list
 call_transformer(
     Phase,
     Node0,
     #state{
         transformer=Transformer,
-        extra=Extra0
+        extra=Extra0,
+        errors=ExistingErrors,
+        warnings=ExistingWarnings
     } = State0)
 ->
-    {Action, NewNode, NewExtra} = case Transformer(Phase, Node0, Extra0) of
-        {error, Reason} ->
-            ErrorMarker = format_marker(error, Reason, Node0, State0),
-            {return, ErrorMarker, Extra0};
-        {error, Reason, Extra1} ->
-            ErrorMarker = format_marker(error, Reason, Node0, State0),
-            {return, ErrorMarker, Extra1};
-        {warning, Reason} ->
-            WarningMarker = format_marker(warning, Reason, Node0, State0),
-            {return, WarningMarker, Extra0};
-        {warning, Reason, Extra1} ->
-            WarningMarker = format_marker(warning, Reason, Node0, State0),
-            {return, WarningMarker, Extra1};
-        delete ->
-            {delete, delete, Extra0};
-        {delete, Extra1} ->
-            {delete, delete, Extra1};
-        return ->
-            {return, Node0, Extra0};
-        {return, Node1} ->
-            {return, Node1, Extra0};
-        {return, Node1, Extra1} ->
-            {return, Node1, Extra1};
-        continue ->
-            {continue, Node0, Extra0};
-        {Node1, Extra1} when is_tuple(Node1) ->
-            {continue, Node1, Extra1};
-        Node1 ->
-            try
-                erl_syntax:type(Node1)
-            of _ ->
-                {continue, Node1, Extra0}
-            catch error:{badarg, _} ->
-                erlang:error({badsyntax, Node1})
-            end
+    set_logger_target(line, erl_syntax:get_pos(Node0)),
+    set_logger_target(state, Extra0),
+    {Action, Node1, Extra1, Reasons} = expand_callback_return(
+        Transformer(Phase, Node0, Extra0), Node0, Extra0
+    ),
+    case Node1 of
+        [First|_] ->
+            set_logger_target(line, erl_syntax:get_pos(First));
+        _ ->
+            set_logger_target(line, erl_syntax:get_pos(Node1))
     end,
-    {Action, NewNode, State0#state{extra=NewExtra}}.
+    set_logger_target(state, Extra1),
+    ?info(
+        "~s ~s -> ~s ~s",
+        [Phase, erl_syntax:type(Node0), Action, erl_syntax:type(Node1)]
+    ),
+    % ?debug("Input ~tp", [Extra0]),
+    % ?show("Input", Node0),
+    % ?debug("Output ~tp", [Extra1]),
+    % ?show("Output", Node1),
+    State1 = State0#state{extra=Extra1},
+    {Errors, Warnings} = format_markers(Reasons, Node1, State1),
+    State2 = State1#state{
+        errors=Errors ++ ExistingErrors,
+        warnings=Warnings ++ ExistingWarnings
+    },
+    case Action of
+        _ when length(Errors) > 0 ->
+            {return, Node1, State2};
+        exceptions ->
+            {continue, Node1, State2};
+        delete ->
+            {return, [], State2};
+        continue ->
+            {continue, Node1, State2};
+        return ->
+            {return, Node1, State2}
+    end.
 
 %%% @private
+%%% @doc Normalizes the return value from the user transformar into a
+%%% consistent 4-tuple.
+%%%
+%%% This makes the {@link call_transformer/3} much simpler to write.
+-spec expand_callback_return(Return, ast(), Extra)
+    -> {action(), ast(), Extra, Reasons}
+when
+    Return ::
+        Action |
+        {continue | return, AST} |
+        {continue | return, AST, Extra} |
+        {error | warning, Reason} |
+        {error, Reason, Extra} |
+        {warning, Reason, AST} |
+        {warning, Reason, AST, Extra} |
+        {exceptions, Reasons, AST, Extra} |
+        {action(), AST, Extra, Reasons} |
+        {AST, Extra} |
+        AST,
+    Action :: continue | delete | return,
+    AST :: ast() | [ast()],
+    Extra :: term(),
+    Reason :: term(),
+    Reasons :: [{error | warning, Reason}].
+expand_callback_return(Action, Node0, Extra0) when
+    Action == continue orelse Action == delete orelse Action == return
+->
+    {Action, Node0, Extra0, []};
+expand_callback_return({Action, Reason}, Node0, Extra0) when
+    Action == error orelse Action == warning
+->
+    {exceptions, Node0, Extra0, [{Action, Reason}]};
+expand_callback_return({error, Reason, Extra1}, Node0, _Extra0) ->
+    {exceptions, Node0, Extra1, [{error, Reason}]};
+expand_callback_return({warning, Reason, Node1}, _Node0, Extra0) ->
+    {exceptions, Node1, Extra0, [{warning, Reason}]};
+expand_callback_return({warning, Reason, Node1, Extra1}, _Node0, _Extra0) ->
+    {exceptions, Node1, Extra1, [{warning, Reason}]};
+expand_callback_return({exceptions, Exceptions, Node1, Extra1}, _Node0, _Extra0) ->
+    {exceptions, Node1, Extra1, Exceptions};
+expand_callback_return({delete, Extra1}, Node0, _Extra0) ->
+    {delete, Node0, Extra1, []};
+expand_callback_return({return, Node1}, _Node0, Extra0) ->
+    {return, Node1, Extra0, []};
+expand_callback_return({return, Node1, Extra1}, _Node0, _Extra0) ->
+    {return, Node1, Extra1, []};
+expand_callback_return({Action, Node1, Extra1, Reasons}, _Node0, _Extra0) when
+    Action == continue orelse
+    Action == delete orelse
+    Action == return orelse
+    Action == error orelse
+    Action == warning
+->
+    %% Handle recursion, mostly useful for transform wrappers
+    {Action, Node1, Extra1, Reasons};
+expand_callback_return({continue, Node1, Extra1}, _Node0, _Extra0) ->
+    {continue, Node1, Extra1, []};
+expand_callback_return({Node1, Extra1}, _Node0, _Extra0) when
+    is_tuple(Node1) % orelse is_tuple(hd(Node1))
+->
+    {continue, Node1, Extra1, []};
+expand_callback_return(Node1, _Node0, Extra0) ->
+    try
+        erl_syntax:type(Node1)
+    of _ ->
+        {continue, Node1, Extra0, []}
+    catch error:{badarg, _} ->
+        erlang:error({badsyntax, Node1})
+    end.
+
+%%% @private
+-spec format_markers([term()], ast(), #state{}) -> {Errors, Warnings} when
+    Errors :: [error_marker()],
+    Warnings :: [warning_marker()].
+format_markers(Reasons, Node, State) ->
+    lists:partition(
+        fun({Type, _}) ->
+            Type == error
+        end,
+        [
+            format_marker(Type, Reason, Node, State)
+        ||
+            {Type, Reason} <- Reasons
+        ]
+    ).
+
+%%% @private
+-spec format_marker(error,   term(), ast(), #state{}) -> error_marker();
+                   (warning, term(), ast(), #state{}) -> warning_marker().
+format_marker(Type, {File, {Position, FormattingModule, _Reason}} = Marker, _Node, #state{})
+when
+    (Type == error orelse Type == warning) andalso
+    (File == [] orelse is_integer(hd(File))) andalso
+    (is_integer(Position) orelse is_integer(element(1, Position))) andalso
+    is_atom(FormattingModule)
+->
+    {Type, Marker};
 format_marker(Type, Reason, Node, #state{
     file=File,
     module=Module
 }) ->
     Position = erl_syntax:get_pos(Node),
-    {Type, {File, {Position, Module, Reason}}}.
+    FormattingModule = case erlang:function_exported(Module, format_error, 1) of
+        true ->
+            Module;
+         false ->
+            merlin_lib
+    end,
+    {Type, {File, {Position, FormattingModule, Reason}}}.
+
+-spec group_by_file(Exceptions) -> [{File :: string(), [marker()]}] when
+    Exceptions :: [error_marker() | warning_marker() | marker()].
+group_by_file(Exceptions) ->
+    maps:to_list(lists:foldl(fun group_by_file/2, #{}, Exceptions)).
+
+-spec group_by_file(Exception, Files) -> Files when
+    Exception :: error_marker() | warning_marker() | marker(),
+    Files :: #{ File => [marker()] },
+    File :: string().
+group_by_file({Type, {File, {Position, FormattingModule, _Reason}} = Marker}, Files)
+when
+    (Type == error orelse Type == warning) andalso
+    (File == [] orelse is_integer(hd(File))) andalso
+    (is_integer(Position) orelse is_integer(element(1, Position))) andalso
+    is_atom(FormattingModule)
+->
+    group_by_file(Marker, Files);
+group_by_file({File, Marker}, Files) ->
+    Markers = maps:get(File, Files, []),
+    Files#{
+        File => [Marker|Markers]
+    }.
+
+%% @doc Like `erl_synatx_lib:analyze_forms' but returns maps.
+%% Also all fields are present, except `module' so you can determine if it
+%% exists or not. It also includes a `file' field and makes some fields
+%% easier to use, like records being a map from name to definition.
+-spec analyze([ast()]) -> analysis().
+analyze(ModuleForms) ->
+    Analysis = maps:from_list(erl_syntax_lib:analyze_forms(ModuleForms)),
+    Analysis#{
+        %% `module` is taken from Analysis if defined
+        exports => maps:get(exports, Analysis, []),
+        functions => maps:get(functions, Analysis, []),
+        imports => get_as_map(Analysis, imports),
+        attributes => attribute_map(Analysis),
+        %% Seems unused, at least the docs does not mention carte blanc `-import`
+        module_imports => maps:get(module_imports, Analysis, []),
+        records => maps:map(
+            fun record_fields_as_map/2, get_as_map(Analysis, records)
+        ),
+
+        %% Not part of the original, but so useful to have
+        file => merlin_lib:file(ModuleForms)
+    }.
+
+%% @doc Same as `analyze/1`, but also extracts and appends any inline
+%% `-compile` options to the given one.
+analyze(ModuleForms, Options) ->
+    Analysis = analyze(ModuleForms),
+    CombinedOptions = case Analysis of
+        #{ attributes := #{ compile := InlineOptions } } ->
+            Options ++ lists:flatten(InlineOptions);
+        _ ->
+            Options
+    end,
+    {Analysis, CombinedOptions}.
 
 %%% @private
-not_deleted(delete) -> false;
-not_deleted(_) -> true.
+get_as_map(Analysis, Key) ->
+    maps:from_list(maps:get(Key, Analysis, [])).
 
 %%% @private
-not_errors_or_warnings({error, _}) -> false;
-not_errors_or_warnings({warning, _}) -> false;
-not_errors_or_warnings(_) -> true.
+record_fields_as_map(_Key, Fields) ->
+    maps:from_list(Fields).
 
 %%% @private
-extract_errors_and_warnings(Trees, ErrorsAndWarnings) when is_list(Trees) ->
-    lists:foldl(fun extract_errors_and_warnings/2, ErrorsAndWarnings, Trees);
-extract_errors_and_warnings(Tree, ErrorsAndWarnings) ->
-    erl_syntax_lib:fold(fun extractor/2, ErrorsAndWarnings, Tree).
+attribute_map(Analysis) when not is_map_key(attributes, Analysis) ->
+    #{};
+attribute_map(#{ attributes := [] }) ->
+    #{};
+attribute_map(#{ attributes := Attributes }) ->
+    Groups = lists:foldl(fun pair_grouper/2, #{}, Attributes),
+    Groups#{
+        spec => group_by_name(maps:get(spec, Groups, [])),
+        type => group_by_name(maps:get(type, Groups, []))
+    }.
 
-extractor({warning, Warning}, {Errors, Warnings}) ->
-    {Errors, [Warning|Warnings]};
-extractor({error, Error}, {Errors, Warnings}) ->
-    {[Error|Errors], Warnings};
-extractor(_Tree, {Errors, Warnings}) -> {Errors, Warnings}.
+%% @private
+%% @doc Groups the given list of two-tuples into a map.
+group_pairs(Pairs) ->
+    lists:foldl(fun pair_grouper/2, #{}, Pairs).
 
-filter_subtree(Tree, Filter) when is_function(Filter, 1) ->
-    case erl_syntax:subtrees(Tree) of
-        [] ->
-            Tree;
-        Groups ->
-            erl_syntax:update_tree(Tree, [
-                [
-                    Subtree
-                ||
-                    Subtree <- Group,
-                    Filter(Subtree)
-                ]
-            ||
-                Group <- Groups
-            ])
-    end.
+%% @private
+pair_grouper({Type, Value}, Groups) ->
+    Values = maps:get(Type, Groups, []),
+    maps:put(Type, [Value|Values], Groups).
 
-filter(Tree, Filter) when is_function(Filter, 1) ->
-    State = #state{transformer=fun filter_internal/3, extra=Filter},
-    transform_internal(Tree, State).
+%% @private
+%% @doc Groups the list of variable length tuples by their first element.
+group_by_name(Tuples) ->
+    group_pairs([ {element(1, Value), Value} || Value <- Tuples ]).
 
-%%% @private
-filter_internal(node, Node, Filter) ->
-    case Filter(Node) of
-        true  -> {Node, Filter};
-        false -> delete
+
+annotate(ModuleForms) ->
+    annotate(ModuleForms, [bindings, resolve_calls, file]).
+
+annotate(ModuleForms, Options) ->
+    State = maps:merge(maps:from_list(proplists:unfold(Options)), #{
+        analysis => analyze(ModuleForms)
+    }),
+    {Forms, _} = transform(ModuleForms, fun annotate_internal/3, State),
+    Forms.
+
+annotate_internal(enter, Form0, #{ analysis := Analysis0 } = State0) ->
+    Analysis1 = case get_file_attribute(Form0) of
+        false   -> Analysis0;
+        NewFile -> Analysis0#{file => NewFile}
+    end,
+    State1 = State0#{ analysis => Analysis1 },
+    Form1 = case State1 of
+        #{ file := true, analysis := #{ file := File } } ->
+            merlin_lib:set_annotation(Form0, file, File);
+        _ ->
+            Form0
+    end,
+    case annotate_form(erl_syntax:type(Form1), Form1, State1) of
+        {error, _}   = Form2 -> Form2;
+        {warning, _} = Form2 -> Form2;
+        Form2                -> {continue, Form2, State1}
     end;
-filter_internal(_, Forms, Filter) -> {Forms, Filter}.
+annotate_internal(_, _, _) -> continue.
 
-%%% @doc Annotates function definitions with the bindings using
-%%%      `erl_syntax_lib:with_bindings/2' before calling the inner
-%%%      transformer.
-%%%
-%%%      This allows the inner transformer to safely generate new
-%%%      bindings, or otherwise act on the current set of env, free and bound
-%%%      bindings.
-%%%
-%%%      @see erl_syntax_lib:annotate_bindings/2
--spec with_binding(ast(), transformer(Extra), Extra) -> transformer(Extra).
-with_binding(Forms, Transformer, Extra) ->
-    InternalState = #state{transformer=Transformer, extra=Extra},
-    transform(Forms, fun with_binding_internal/3, InternalState).
+annotate_form(application, Form, #{
+    analysis := Analysis ,
+    resolve_calls := true
+}) ->
+    case resolve_call(Form, Analysis) of
+        {module, _} = Result ->
+            erl_syntax:add_ann(Result, Form);
+        dynamic ->
+            %% Dynamic value, can't resolve
+            Form;
+        ErrorOrWarning ->
+            ErrorOrWarning
+    end;
+annotate_form(function, Form, #{
+    bindings := Bindings,
+    analysis := #{
+        attributes := Attributes,
+        exports := Exports
+    }
+}) ->
+    Specs = maps:get(spec, Attributes, #{}),
+    Name = erl_syntax:atom_value(erl_syntax:function_name(Form)),
+    Arity = erl_syntax:function_arity(Form),
+    FunctionArity = {Name, Arity},
+    IsExported = lists:member({Name, Arity}, Exports),
+    Form1 = merlin_lib:set_annotation(Form, is_exported, IsExported),
+    Form2 = case Specs of
+        #{ FunctionArity := Spec } ->
+            merlin_lib:set_annotation(Form, spec, Spec);
+        _ ->
+            Form1
+    end,
+    if Bindings ->
+        Env = merlin_lib:get_annotation(Form2, env, ordsets:new()),
+        erl_syntax_lib:annotate_bindings(Form2, Env);
+    ?else ->
+        Form2
+    end;
+annotate_form(module, Form, #{ analysis := Analysis }) ->
+    merlin_lib:set_annotation(Form, analysis, Analysis);
+annotate_form(_, Form, _) -> Form.
 
-%%% @private
-with_binding_internal(
-    enter,
-    {function, _Line, _Name, _Arity, _Clauses} = Function0,
-    #state{transformer=Transformer, extra=Extra0} = State)
-->
-    Function1 = erl_syntax_lib:with_binding(Function0, ordsets:new()),
-    {Function2, Extra1} = Transformer(enter, Function1, Extra0),
-    {Function2, State#state{extra=Extra1}};
-with_binding_internal(
-    Phase,
-    Form0,
-    #state{transformer=Transformer, extra=Extra0} = State)
-->
-    {Form1, Extra1} = Transformer(Phase, Form0, Extra0),
-    {Form1, State#state{extra=Extra1}}.
-
-%%% @doc Get all bindings associated with the given `Form'.
-%%%
-%%%      Returns a sorted proplist from binding to kind, prefering bound over
-%%%      env over free.
-%%%
-%%%      @see get_bindings/2
-%%%      @see with_binding/2
-%%%      @see erl_syntax_lib:annotate_bindings/2
-get_bindings(Form) ->
-    Env = bindings_with_kind(Form, env),
-    Bound = bindings_with_kind(Form, bound),
-    Free = bindings_with_kind(Form, free),
-    %% Prefer Bound over Env over Free
-    lists:ukeymerge(1, Bound, lists:ukeymerge(1, Env, Free)).
-
-%%% @private
-bindings_with_kind(Form, Kind) ->
-    lists:keysort(1, [{Binding, Kind} || Binding <- get_bindings(Form, Kind)]).
-
-%%% @doc Get all bindings of the given `Kind' associated with the given `Form'.
-%%%
-%%%      @see with_binding/2
-%%%      @see erl_syntax_lib:annotate_bindings/2
--spec get_bindings(ast(), env | bound | free) -> ordsets:ordset(atom()).
-get_bindings(Form, Kind) ->
-    Annotations = erl_syntax:get_ann(Form),
-    case lists:keyfind(Kind, 1, Annotations) of
-        false -> throw({badkey, Kind});
-        Value -> Value
+resolve_call(Node, #{
+    functions := Functions,
+    imports := Imports
+} = Analysis) ->
+    Operator = erl_syntax:application_operator(Node),
+    case erl_syntax:type(Operator) of
+        module_qualifier ->
+            %% Remote call
+            CallModule = erl_syntax:atom_value(
+                erl_syntax:module_qualifier_argument(Operator)
+            ),
+            {module, CallModule};
+        atom ->
+            %% Local call
+            Name = erl_syntax:atom_value(Operator),
+            Arity = length(erl_syntax:application_arguments(Node)),
+            Function = {Name, Arity},
+            case lists:member(Function, Functions) of
+                true ->
+                    %% Function defined in this module
+                    case Analysis of
+                        #{ module := CallModule } ->
+                            {module, CallModule};
+                        _ ->
+                            {warning, "Missing -module, can't resolve local function calls"}
+                    end;
+                false ->
+                    case [
+                            CallModule
+                        ||
+                            {CallModule, ImportedFunctions} <- maps:to_list(Imports),
+                            lists:member(Function, ImportedFunctions)
+                    ] of
+                        [CallModule] ->
+                            {module, CallModule};
+                        [] ->
+                            %% Assume all other calls refer to builtin functions
+                            %% Maybe add a sanity check for compile no_auto_import?
+                            {module, erlang};
+                        CallModules ->
+                            ListPhrase = list_phrase(CallModules),
+                            Message = lists:flatten(io_lib:format(
+                                "Overlapping -import for ~tp/~tp from ~s",
+                                [Name, Arity, ListPhrase]
+                            )),
+                            {error, Message}
+                    end
+            end;
+        _ ->
+            %% Dynamic value, can't resolve
+            dynamic
     end.
 
-get_attribute(Tree, Name, Default) ->
-    case lists:search(fun(Node) ->
-        erl_syntax:type(Node) == attribute andalso
-        erl_syntax:atom_value(erl_syntax:attribute_name(Node)) == Name
-    end, Tree) of
-        {value, Node} -> erl_syntax:attribute_arguments(Node);
-        false -> Default
+list_phrase(List) ->
+    CommaSeperatedList = lists:join(", ", List),
+    LastCommaReplacedWithAnd = string:replace(
+        CommaSeperatedList, ", ", " and ", trailing
+    ),
+    lists:concat(LastCommaReplacedWithAnd).
+
+%%% @doc
+return({Result, _State}) ->
+    return(Result);
+return({warning, Tree, Warnings}) ->
+    {warning, revert(Tree), Warnings};
+return({error, _Error, _Warnings} = Result) ->
+    Result;
+return(Tree) ->
+    revert(Tree).
+
+%%% @private
+%%% @doc Returns an {@link er_lint} compatible forms, with errors and
+%%% warnings as appropriate.
+%%%
+%%% This matches the `case' in {@link compile:foldl_transform/3}.
+finalize(Tree, #state{errors=[], warnings=[]}) ->
+    Tree;
+finalize(Tree, #state{errors=[], warnings=Warnings}) ->
+    {warning, Tree, group_by_file(Warnings)};
+finalize(_Tree, #state{errors=Errors, warnings=Warnings}) ->
+    {error, group_by_file(Errors), group_by_file(Warnings)}.
+
+%%% @doc Reverts back from Syntax Tools format to Erlang forms.
+%%%
+%%% Accepts a list of forms, or a single form.
+%%%
+%%% Copied from `parse_trans:revert_form/1' and slighly modifed. The original
+%%% also handles a bug in R16B03, but that is ancient history now.
+revert(Forms) when is_list(Forms) ->
+    lists:map(fun revert/1, Forms);
+revert(Form) ->
+    case erl_syntax:revert(Form) of
+        {attribute, Line, Arguments, Tree} when element(1, Tree) == tree ->
+            {attribute, Line, Arguments, erl_syntax:revert(Tree)};
+        Result -> Result
     end.
 
-%% Example
-printer(enter, Tree, Indentation) ->
-    Type = erl_syntax:type(Tree),
-    io:format("~s~p~n", [lists:duplicate(Indentation, "  "), Type]),
-    {Tree, Indentation+1};
-printer(node, Node, Indentation) ->
-    Type = erl_syntax:type(Node),
-    {_, _, Value} = erl_syntax:revert(Node),
-    io:format("~s~p ~p~n", [lists:duplicate(Indentation, "  "), Type, Value]),
-    {Node, Indentation};
-printer(exit, Tree, Indentation) ->
-    Type = erl_syntax:type(Tree),
-    io:format("~send ~p~n", [lists:duplicate(Indentation-1, "  "), Type]),
-    {Tree, Indentation-1}.
+get_logger_target() ->
+    case logger:get_process_metadata() of
+        undefined -> #{};
+        Metadata -> maps:get(target, Metadata, #{})
+    end.
+
+% get_logger_target(Key, Default) ->
+%     maps:get(Key, get_logger_target(), Default).
+
+set_logger_target(Key, Value) ->
+    logger:update_process_metadata(#{
+        target => maps:put(Key, Value, get_logger_target())
+    }).
+
+unset_logger_target(Key) ->
+    logger:update_process_metadata(#{
+        target => maps:remove(Key, get_logger_target())
+    }).
