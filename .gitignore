@@ -2,3 +2,5 @@
 erl_crash.dump
 _build
 rebar3.crashdump
+
+console.log
