@@ -1,6 +1,6 @@
 -module(merlin_in_transform).
 
--include("merlin.hrl").
+-include("merlin_quote.hrl").
 -include("log.hrl").
 
 -export([
