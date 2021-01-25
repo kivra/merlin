@@ -5,10 +5,11 @@
 ]).
 
 -export([
+    format_forms/1,
     format_stack/1,
     log_macro/4,
     pretty/1,
-    format_forms/1
+    write_log_file/0
 ]).
 
 'DEFINE PROCEDURAL MACRO'(File, Line, Module, 'MERLIN INTERNAL DEFINE PROCEDURAL MACRO', 0, Macro, _BodyFun) ->
@@ -36,6 +37,13 @@ log_macro(Level, Format, Metadata, MacroMetadata) when
     logger:log(Level, Format, maps:merge(MacroMetadata, Metadata));
 log_macro(Level, A, B, Metadata) ->
     logger:log(Level, A, B, Metadata).
+
+write_log_file() ->
+    %% Only flush if our logger is active
+    case lists:member(debug_log, logger:get_handler_ids()) of
+        true -> logger_std_h:filesync(debug_log);
+        false -> ok
+    end.
 
 %% @doc Returns a {Format, Arguments} pair with the given `Prefix' and `Forms'.
 %% This first tries to render the given 'Forms' as Erlang syntax using

@@ -5,7 +5,7 @@ EBINS := $(wildcard _build/default/lib/*/ebin)
 all: E P examples
 
 clean:
-	rm -f console.log typer_results.erl _build/*/lib/*/{ebin,examples}/*.{E,P}
+	rm -f typer_results.erl _build/*/lib/*/{ebin,examples}/*.{E,P}
 	rebar3 clean
 
 compile: _build/default/lib/merlin/ebin/merlin.beam
@@ -25,7 +25,6 @@ typer_results.erl: ${REBAR3_PLT}
 	asdf env erl typer $(EBINS:%=-pa %) --plt $@ -I include/ -r src > typer_results.erl
 
 _build/default/lib/merlin/ebin/merlin.beam console.log: src/* include/* priv/*
-	echo > console.log
 	env ERL_AFLAGS="-config priv/sys.config" \
 	rebar3 compile
 
