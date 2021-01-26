@@ -54,3 +54,18 @@ complex(URI) ->
         _ ->
             throw({unknown_error, URI})
     end.
+
+many() ->
+    ?with [_ ||
+        {ok, Post} <- posts:get(123),
+        logger:info("Found post ~p", [Post]),
+        #{ author_id := UserID } = Post,
+        {ok, Author} <- users:get(UserID),
+        logger:info("Found author ~p", [Author]),
+        _ <- api:post(["/users/", UserID], logged_in),
+        {ok, Post#{ author => Author }}
+    ] of
+        {ok, Value} -> Value
+    ?else
+        {error, Error} -> error(Error)
+    end.

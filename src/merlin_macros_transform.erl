@@ -56,8 +56,7 @@ eval(Body, Options) ->
         erl_eval:expr(
             Merl,
             erl_eval:new_bindings(),
-            % none, %% Local function handler
-            {eval, fun function_handler/3},
+            {eval, fun function_handler/3}, %% Local function handler
             none, %% Remote function handler
             value
         )
@@ -87,45 +86,3 @@ ensure_location(Node, [{Module, Function, Arity, []}|StackTrace]) ->
     [{Module, Function, Arity, location(Node)}|StackTrace];
 ensure_location(_Node, StackTrace) ->
     StackTrace.
-
-%% Here is the try inside eval_procedural_macros
-%% Here File, Line etc points to the macro _call_,
-%% not its definition. To get even better errors, the below
-%% should probably be changed to reparse the soure, keeping
-%% includes, and find the original macro definition.
-%% Det lättaste verkar att vara att epp källkoden, plocka ut alla `-file`,
-%% filtera ut .hrl (eller åtminstone skippa sig själv), och epp_dodger dessa
-%% Typiskt värt att ha i merlin, eller merlin_lib. Kanske
-%% också splica in de inkluderade filerna inline, så man får en
-%% enda lista med Forms, som inkluderar alla källkod erlc
-%% faktiskt ser.
-
-% -define(procedural(MACRO, BODY),
-%     merlin_internal:'DEFINE PROCEDURAL MACRO'(
-%         ?FILE,
-%         ?LINE,
-%         ?MODULE_STRING,
-%         ?FUNCTION_NAME,
-%         ?FUNCTION_ARITY,
-%         ??MACRO,
-%         ??BODY
-%     )
-% ).
-
-% -define(module_procedural(MACRO, BODY),
-%     -'MERLIN INTERNAL DEFINE PROCEDURAL MACRO'(
-%         ?FILE,
-%         ?LINE,
-%         ?MODULE_STRING,
-%         ??MACRO,
-%         ??BODY
-%     )
-% ).
-
-% -define(eval(Expression), ?procedural(eval(Expression),
-%     erl_parse:abstract(Expression, ?LINE)
-% )).
-
-% -define(hygienic(MACRO, BODY), ?procedural(hygienic(MACRO, BODY),
-%     BODY % Implement hygine, aka rename variables
-% )).
