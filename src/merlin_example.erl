@@ -188,7 +188,7 @@ printer(enter, Tree, #{ indent := Indentation }) ->
     {Tree, #{
         indent => Indentation+1
     }};
-printer(node, Node, #{ indent := Indentation }) ->
+printer(leaf, Node, #{ indent := Indentation }) ->
     Type = erl_syntax:type(Node),
     Value = case erl_syntax:revert(Node) of
         {_, _, Val} -> Val;
@@ -248,7 +248,7 @@ gather_atoms_by_erl_syntax(enter, Form, _State) ->
             end;
         _ -> continue
     end;
-gather_atoms_by_erl_syntax(node, Form, Atoms) when is_map(Atoms) ->
+gather_atoms_by_erl_syntax(leaf, Form, Atoms) when is_map(Atoms) ->
     case erl_syntax:type(Form) of
         atom ->
             Name = erl_syntax:atom_value(Form),
@@ -286,7 +286,7 @@ gather_atoms_by_record(enter, #function{name=?target} = FunctionTree, _State) ->
     {continue, FunctionTree, #{}};
 gather_atoms_by_record(enter, #function{}, _State) ->
     return;
-gather_atoms_by_record(node, #atom{name=Name} = AtomNode, Atoms) when is_map(Atoms) ->
+gather_atoms_by_record(leaf, #atom{name=Name} = AtomNode, Atoms) when is_map(Atoms) ->
     Count = maps:get(Name, Atoms, 0),
     {AtomNode, Atoms#{
         Name => Count + 1

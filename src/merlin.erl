@@ -48,7 +48,7 @@
         }
     }.
 
--type phase() :: enter | node | exit.
+-type phase() :: enter | leaf | exit.
 
 -type ast() :: erl_syntax:syntaxTree().
 
@@ -143,7 +143,7 @@ transform_internal(Form, State0) ->
     State1 = update_file(Form, State0),
     case erl_syntax:is_leaf(Form) of
         true ->
-            {_Action, Node1, State2} = call_transformer(node, Form, State1),
+            {_Action, Node1, State2} = call_transformer(leaf, Form, State1),
             %% Here, at the leaf node, the action does not matter, as we're not
             %% recursing anymore.
             {Node1, State2};
