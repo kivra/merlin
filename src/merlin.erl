@@ -137,7 +137,8 @@ transform(Forms, Transformer, Extra) when is_function(Transformer, 3) ->
 %%% @private
 -spec transform_internal(ast(), #state{}) -> {ast(), #state{}}.
 transform_internal(Forms0, State0) when is_list(Forms0) ->
-    lists:mapfoldl(fun transform_internal/2, State0, Forms0);
+    {Forms1, State1} = lists:mapfoldl(fun transform_internal/2, State0, Forms0),
+    {lists:flatten(Forms1), State1};
 transform_internal(Form, State0) ->
     set_target_mfa(Form, State0),
     State1 = update_file(Form, State0),
@@ -209,8 +210,8 @@ get_file_attribute(Form) ->
         _ -> false
     end.
 
-% -spec mapfold_subtrees(Fun, #state{}, ast() | [ast()]) -> {#state{}, [ast()]} when
-%     Fun :: fun((ast(), #state{}) -> {ast(), #state{}}).
+-spec mapfold_subtrees(Fun, #state{}, ast() | [ast()]) -> {#state{}, [ast()]} when
+    Fun :: fun((ast(), #state{}) -> {ast(), #state{}}).
 mapfold_subtrees(Fun, State0, Tree0) ->
     case erl_syntax:subtrees(Tree0) of
         [] ->
@@ -249,23 +250,22 @@ call_transformer(
     {Action, Node1, Extra1, Reasons} = expand_callback_return(
         Transformer(Phase, Node0, Extra0), Node0, Extra0
     ),
-    case Node1 of
-        [First|_] ->
-            set_logger_target(line, erl_syntax:get_pos(First));
-        _ ->
-            set_logger_target(line, erl_syntax:get_pos(Node1))
+    First = case Node1 of
+        [Head|_] -> Head;
+        _ -> Node1
     end,
+    set_logger_target(line, erl_syntax:get_pos(First)),
     set_logger_target(state, Extra1),
     ?info(
         "~s ~s -> ~s ~s",
-        [Phase, erl_syntax:type(Node0), Action, erl_syntax:type(Node1)]
+        [Phase, erl_syntax:type(Node0), Action, erl_syntax:type(First)]
     ),
     % ?debug("Input ~tp", [Extra0]),
     % ?show("Input", Node0),
     % ?debug("Output ~tp", [Extra1]),
     % ?show("Output", Node1),
     State1 = State0#state{extra=Extra1},
-    {Errors, Warnings} = format_markers(Reasons, Node1, State1),
+    {Errors, Warnings} = format_markers(Reasons, First, State1),
     State2 = State1#state{
         errors=Errors ++ ExistingErrors,
         warnings=Warnings ++ ExistingWarnings
@@ -345,13 +345,24 @@ expand_callback_return({Node1, Extra1}, _Node0, _Extra0) when
     is_tuple(Node1) % orelse is_tuple(hd(Node1))
 ->
     {continue, Node1, Extra1, []};
-expand_callback_return(Node1, _Node0, Extra0) ->
+expand_callback_return(Nodes0, _Node0, Extra0) when is_list(Nodes0) ->
+    Nodes1 = lists:flatten(Nodes0),
+    lists:foreach(fun assert_valid_node/1, Nodes1),
+    {continue, Nodes1, Extra0, []};
+expand_callback_return(Node1, Node0, Extra0) ->
+    case assert_valid_node(Node1) of
+        form_list ->
+            Nodes = erl_syntax:form_list_elements(Node1),
+            expand_callback_return(Nodes, Node0, Extra0);
+        _ ->
+            {continue, Node1, Extra0, []}
+    end.
+
+assert_valid_node(Node) ->
     try
-        erl_syntax:type(Node1)
-    of _ ->
-        {continue, Node1, Extra0, []}
+        erl_syntax:type(Node)
     catch error:{badarg, _} ->
-        erlang:error({badsyntax, Node1})
+        erlang:error({badsyntax, Node})
     end.
 
 %%% @private
