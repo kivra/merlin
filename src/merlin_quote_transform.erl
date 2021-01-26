@@ -20,12 +20,6 @@ parse_transform(Forms, Options) ->
     ),
     return(FinalForms, Options).
 
-return({error, _, _} = Result, _Options) -> Result;
-return({warnings, Forms, Warnings}, Options) ->
-    {warnings, merl_transform:parse_transform(Forms, Options), Warnings};
-return(Forms, Options) ->
-    merl_transform:parse_transform(Forms, Options).
-
 quote(enter, Form, #{ module := Module}) ->
     case Form of
         ?Q([ "'@Name'(_@Args) when _@__@Guard -> _@_@Clauses." ]) ->
@@ -233,3 +227,17 @@ check_only_one_quote_pattern(Clauses) ->
         end,
         Clauses
     ).
+
+return(Result, Options) ->
+    return(fun merl_transform/2, Result, Options).
+
+return(_Fun, {error, _, _} = Result, _Options) ->
+    Result;
+return(Fun, {warnings, Forms, Warnings}, Options) ->
+    {warnings, Fun(Forms, Options), Warnings};
+return(Fun, Forms, Options) ->
+    Fun(Forms, Options).
+
+merl_transform(Forms0, Options) ->
+    Forms1 = merlin_lib:simplify_forms(Forms0),
+    merl_transform:parse_transform(Forms1, Options).

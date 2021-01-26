@@ -1,5 +1,6 @@
 -module(merlin_lib).
 
+-include_lib("stdlib/include/assert.hrl").
 -include("log.hrl").
 
 -export([
@@ -17,12 +18,14 @@
     erl_error_format/2,
     format_error_marker/2,
     fun_to_mfa/1,
-    split_by/2
+    split_by/2,
+    simplify_forms/1
 ]).
 
 -export([
     get_annotation/2,
     get_annotation/3,
+    legacy_anno/1,
     set_annotation/3,
     update_annotation/2
 ]).
@@ -64,6 +67,8 @@
     end
 ).
 
+-define(ERL_ANNO_KEYS, [file, generated, location, record, text]).
+
 %%% @doc Returns the filename for the first `-file' attribute in `Forms', or
 %%% `""' if not found.
 -spec file([merlin:ast()]) -> string().
@@ -99,6 +104,19 @@ safe_value(Node) when is_tuple(Node) ->
     value(Node);
 safe_value(Value) ->
     Value.
+
+%% @doc Returns the given forms as {@link erl_parse} forms with their {@link
+%% erl_anno} set to just location. This allow older code, that doesn't handle
+%% the new annotaions, to still be called.
+simplify_forms(Forms0) ->
+    {Forms1, _} = merlin:transform(Forms0, fun legacy_anno/3, '_'),
+    merlin:revert(Forms1).
+
+legacy_anno(Node) ->
+    erl_syntax:set_pos(Node, erl_anno:location(erl_syntax:get_pos(Node))).
+
+legacy_anno(_, Node, _) ->
+    legacy_anno(Node).
 
 %%% @doc Callback for formatting error messages from this module
 %%%
@@ -197,15 +215,75 @@ get_annotation(Form, Annotation, Default) ->
 
 %%% @doc Returns all annotations associated with the given `Form' as a map.
 get_annotations(Form) ->
-    maps:from_list(erl_syntax:get_ann(Form)).
+    {ErlAnno, ErlSyntax} = get_annotations_internal(Form),
+    maps:merge(maps:from_list(ErlAnno), ErlSyntax).
 
 set_annotation(Form, Annotation, Value) ->
     update_annotation(Form, #{ Annotation => Value }).
 
 update_annotation(Form, NewAnnotations) ->
-    Annotations = get_annotations(Form),
-    UpdatedAnnotations = maps:merge(Annotations, NewAnnotations),
-    erl_syntax:set_ann(Form, maps:to_list(UpdatedAnnotations)).
+    {ErlAnno, ErlSyntax} = get_annotations_internal(Form),
+    {NewErlAnno, NewErlSyntax} = lists:partition(
+        fun is_erl_anno/1, maps:to_list(NewAnnotations)
+    ),
+    UpdatedErlAnno = lists:foldl(fun set_erl_anno/2, ErlAnno, NewErlAnno),
+    UpdatedErlSyntax = maps:merge(ErlSyntax, maps:from_list(NewErlSyntax)),
+    Form1 = erl_syntax:set_pos(Form, UpdatedErlAnno),
+    erl_syntax:set_ann(Form1, maps:to_list(UpdatedErlSyntax)).
+
+%% @private
+%% @doc Returns all annotaions from {@link erl_anno} and {@link erl_synatx}.
+get_annotations_internal(Form) ->
+    Anno = erl_syntax:get_pos(Form),
+    ErlAnno = [
+        {Name, get_erl_anno(Name, Anno)}
+    ||
+        Name <- ?ERL_ANNO_KEYS,
+        get_erl_anno(Name, Anno) =/= undefined
+    ],
+    ErlSyntax = maps:from_list(erl_syntax:get_ann(Form)),
+    ?assertEqual(
+        [],
+        ordsets:intersection(
+            ?ERL_ANNO_KEYS, ordsets:from_list(maps:keys(ErlSyntax))
+        ),
+        "erl_anno keys must not be saved as erl_synax annotations"
+    ),
+    {ErlAnno, ErlSyntax}.
+
+%% @private
+is_erl_anno({file, _Value}) -> true;
+is_erl_anno({generated, _Value}) -> true;
+is_erl_anno({location, _Value}) -> true;
+is_erl_anno({record, _Value}) -> true;
+is_erl_anno({text, _Value}) -> true;
+is_erl_anno({_Key, _Value}) -> true.
+
+%% @private
+get_erl_anno(file, Anno) ->
+    erl_anno:file(Anno);
+get_erl_anno(generated, Anno) ->
+    erl_anno:generated(Anno);
+get_erl_anno(location, Anno) ->
+    erl_anno:location(Anno);
+get_erl_anno(record, Anno) ->
+    erl_anno:record(Anno);
+get_erl_anno(text, Anno) ->
+    erl_anno:text(Anno);
+get_erl_anno(_, _) ->
+    undefined.
+
+%% @private
+set_erl_anno({file, File}, Anno) ->
+    erl_anno:set_file(File, Anno);
+set_erl_anno({generated, Generated}, Anno) ->
+    erl_anno:set_generated(Generated, Anno);
+set_erl_anno({location, Location}, Anno) ->
+    erl_anno:set_location(Location, Anno);
+set_erl_anno({record, Record}, Anno) ->
+    erl_anno:set_record(Record, Anno);
+set_erl_anno({text, Text}, Anno) ->
+    erl_anno:set_text(Text, Anno).
 
 %%% @doc Returns the argument to the first module attribute with the given
 %%% name, or Default if not found.
