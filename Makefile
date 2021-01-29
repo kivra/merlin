@@ -24,6 +24,9 @@ ${REBAR3_PLT}: src/* include/*
 typer_results.erl: ${REBAR3_PLT}
 	asdf env erl typer $(EBINS:%=-pa %) --plt $@ -I include/ -r src > typer_results.erl
 
+priv/sys.config:
+	cp -i priv/sys.config.sample priv/sys.config
+
 _build/default/lib/merlin/ebin/merlin.beam console.log: src/* include/* priv/*
 	env ERL_AFLAGS="-config priv/sys.config" \
 	rebar3 compile

@@ -18,7 +18,8 @@ match() ->
     %% Always ok to use trailing underscore
     Comment_ = comments:get(31),
     case Comment_ of
-        %% This however would not compile
+        %% This however would not compile, as it's ambiguous if it
+        %% should be incremented or refer to the current number.
         %% #{ author := Author } ->
         #{ author := Author_ } ->
             maps:get(posts, Author_);
