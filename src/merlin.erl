@@ -394,8 +394,9 @@ when
     {Type, Marker};
 format_marker(Type, Reason, Node, #state{
     file=File,
-    module=Module
+    transformer=Transformer
 }) ->
+    {module, Module} = erlang:fun_info(Transformer, module),
     Position = erl_syntax:get_pos(Node),
     FormattingModule = case erlang:function_exported(Module, format_error, 1) of
         true ->
@@ -645,7 +646,7 @@ return(Tree) ->
     revert(Tree).
 
 %%% @private
-%%% @doc Returns an {@link er_lint} compatible forms, with errors and
+%%% @doc Returns an {@link erl_lint} compatible forms, with errors and
 %%% warnings as appropriate.
 %%%
 %%% This matches the `case' in {@link compile:foldl_transform/3}.
