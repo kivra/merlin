@@ -34,19 +34,25 @@
     depth = 0 :: integer()
 }).
 
--type error_marker() :: exception_marker(error).
--type warning_marker() :: exception_marker(warning).
+-type error_marker() :: {error, marker_with_file()}.
+-type warning_marker() :: {warning, marker_with_file()}.
 
 %% {Type, {File, {Position, Module, Reason}}}.
--type exception_marker(Type) :: { Type, marker() }.
+-type marker_with_file() :: { File :: string(), exception_marker() }.
 
--type marker() ::
-    { File :: string(),
-        { Position :: erl_anno:location()
-        , Module :: module()
-        , Reason :: term()
-        }
+-type exception_marker() ::
+    { Position :: erl_anno:location()
+    , Module :: module()
+    , Reason :: term()
     }.
+
+-type exceptions_grouped_by_file() ::
+    [{File :: string(), [exception_marker()]}].
+
+-type parse_transform_return() ::
+    ast() |
+    {warning, ast(), exceptions_grouped_by_file()} |
+    {error, exceptions_grouped_by_file(), exceptions_grouped_by_file()}.
 
 -type phase() :: enter | leaf | exit.
 
@@ -93,9 +99,7 @@
 %%% 3, When you `exit' a subtree
 %%%
 %%% It's recommended to have a match-all clause to future proof your code.
-% -spec transform(ast(), transformer(Extra), Extra) -> {Transformation, Extra}
-% when
-%     Transformation :: ast() | {warning, ast(), [term()]} | {error, [term()], [term()]}.
+-spec transform(ast(), transformer(Extra), Extra) -> {parse_transform_return(), Extra}.
 transform(Forms, Transformer, Extra) when is_function(Transformer, 3) ->
     InternalState = #state{
         file=merlin_lib:file(Forms),
@@ -299,8 +303,11 @@ when
         {error, Reason, Extra} |
         {warning, Reason, AST} |
         {warning, Reason, AST, Extra} |
+        {exceptions, Reasons} |
+        {exceptions, Reasons, AST} |
         {exceptions, Reasons, AST, Extra} |
         {action(), AST, Extra, Reasons} |
+        {parse_transform, parse_transform_return()} |
         {AST, Extra} |
         AST,
     Action :: continue | delete | return,
@@ -322,6 +329,10 @@ expand_callback_return({warning, Reason, Node1}, _Node0, Extra0) ->
     {exceptions, Node1, Extra0, [{warning, Reason}]};
 expand_callback_return({warning, Reason, Node1, Extra1}, _Node0, _Extra0) ->
     {exceptions, Node1, Extra1, [{warning, Reason}]};
+expand_callback_return({exceptions, Exceptions}, Node0, Extra0) ->
+    {exceptions, Node0, Extra0, Exceptions};
+expand_callback_return({exceptions, Exceptions, Node1}, _Node0, Extra0) ->
+    {exceptions, Node1, Extra0, Exceptions};
 expand_callback_return({exceptions, Exceptions, Node1, Extra1}, _Node0, _Extra0) ->
     {exceptions, Node1, Extra1, Exceptions};
 expand_callback_return({delete, Extra1}, Node0, _Extra0) ->
@@ -330,20 +341,29 @@ expand_callback_return({return, Node1}, _Node0, Extra0) ->
     {return, Node1, Extra0, []};
 expand_callback_return({return, Node1, Extra1}, _Node0, _Extra0) ->
     {return, Node1, Extra1, []};
+%% This is for transformer wrappers
 expand_callback_return({Action, Node1, Extra1, Reasons}, _Node0, _Extra0) when
-    Action == continue orelse
-    Action == delete orelse
-    Action == return orelse
-    Action == error orelse
-    Action == warning
+    Action =:= continue orelse
+    Action =:= delete orelse
+    Action =:= return orelse
+    Action =:= error orelse
+    Action =:= warning orelse
+    Action =:= exceptions
 ->
-    %% Handle recursion, mostly useful for transform wrappers
     {Action, Node1, Extra1, Reasons};
+%% This is for wrapping full blown parse transforms
+expand_callback_return({parse_transform, {warning, Forms, Warnings0}, Extra1}, _Node0, _Extra0) ->
+    Warnings1 = ungroup_exceptions(warning, Warnings0),
+    {exceptions, Forms, Extra1, Warnings1};
+expand_callback_return({parse_transform, {error, Errors0, Warnings0, Extra1}}, Node0, _Extra0) ->
+    Errors1 = ungroup_exceptions(warning, Errors0),
+    Warnings1 = ungroup_exceptions(warning, Warnings0),
+    {exceptions, Node0, Extra1, Errors1 ++ Warnings1};
+expand_callback_return({parse_transform, Forms, Extra1}, _Node0, _Extra0) ->
+    {return, Forms, Extra1, []};
 expand_callback_return({continue, Node1, Extra1}, _Node0, _Extra0) ->
     {continue, Node1, Extra1, []};
-expand_callback_return({Node1, Extra1}, _Node0, _Extra0) when
-    is_tuple(Node1) % orelse is_tuple(hd(Node1))
-->
+expand_callback_return({Node1, Extra1}, _Node0, _Extra0) when is_tuple(Node1) ->
     {continue, Node1, Extra1, []};
 expand_callback_return(Nodes0, _Node0, Extra0) when is_list(Nodes0) ->
     Nodes1 = lists:flatten(Nodes0),
@@ -406,14 +426,14 @@ format_marker(Type, Reason, Node, #state{
     end,
     {Type, {File, {Position, FormattingModule, Reason}}}.
 
--spec group_by_file(Exceptions) -> [{File :: string(), [marker()]}] when
-    Exceptions :: [error_marker() | warning_marker() | marker()].
+-spec group_by_file(Exceptions) -> [{File :: string(), [exception_marker()]}] when
+    Exceptions :: [error_marker() | warning_marker() | marker_with_file()].
 group_by_file(Exceptions) ->
     maps:to_list(lists:foldl(fun group_by_file/2, #{}, Exceptions)).
 
 -spec group_by_file(Exception, Files) -> Files when
-    Exception :: error_marker() | warning_marker() | marker(),
-    Files :: #{ File => [marker()] },
+    Exception :: error_marker() | warning_marker() | marker_with_file(),
+    Files :: #{ File => [exception_marker()] },
     File :: string().
 group_by_file({Type, {File, {Position, FormattingModule, _Reason}} = Marker}, Files)
 when
@@ -428,6 +448,14 @@ group_by_file({File, Marker}, Files) ->
     Files#{
         File => [Marker|Markers]
     }.
+
+ungroup_exceptions(Type, Groups) ->
+    [
+        {Type, {File, Marker}}
+    ||
+        {File, Markers} <- Groups,
+        Marker <- Markers
+    ].
 
 %% @doc Like `erl_synatx_lib:analyze_forms' but returns maps.
 %% Also all fields are present, except `module' so you can determine if it
@@ -631,7 +659,13 @@ list_phrase(List) ->
     ),
     lists:concat(LastCommaReplacedWithAnd).
 
-%%% @doc
+%%% @doc Returns the result from {@link transform/3}, or just the
+%% final forms, to an {@link erl_lint} compatible format.
+%%
+%% This {@link revert/1. reverts} and forms, while respecting any
+%% errors and/or warnings.
+-spec return(parse_transform_return() | {parse_transform_return(), State}) -> parse_transform_return()
+when State :: term().
 return({Result, _State}) ->
     merlin_internal:write_log_file(),
     return(Result);
