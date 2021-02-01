@@ -257,7 +257,7 @@ is_erl_anno({generated, _Value}) -> true;
 is_erl_anno({location, _Value}) -> true;
 is_erl_anno({record, _Value}) -> true;
 is_erl_anno({text, _Value}) -> true;
-is_erl_anno({_Key, _Value}) -> true.
+is_erl_anno({_Key, _Value}) -> false.
 
 %% @private
 get_erl_anno(file, Anno) ->
