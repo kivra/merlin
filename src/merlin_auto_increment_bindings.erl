@@ -1,6 +1,7 @@
 -module(merlin_auto_increment_bindings).
 
 -include("merlin_quote.hrl").
+-include("merlin_in.hrl").
 -include("merlin_with_statement.hrl").
 -include("log.hrl").
 
@@ -13,12 +14,9 @@ parse_transform(Forms, Options) ->
     Result = transform(Forms, #{ options => Options }),
     merlin:return(Result).
 
-transform(Forms, State) ->
-    merlin:transform(Forms, fun transforme_pin_operator/3, State).
-
 format_error({ambiguous_binding_usage, Name}) ->
     io_lib:format(
-        "Ambiguous auto incrementing variable usage."
+        "Ambiguous auto incrementing variable usage. "
         "Did you mean to write `~s_`?",
         [Name]
     );
@@ -26,7 +24,7 @@ format_error({unbound_auto_incrementing_binding, Name}) ->
     io_lib:format(
         "Missing auto incrementing variable `~s@`.", [Name]
     );
-format_error({unknow_return, Unknown}) ->
+format_error({unknown_return, Unknown}) ->
     io_lib:format(
         "Internal error: Unexpected result from match transforms ~tp",
         [Unknown]
@@ -35,7 +33,10 @@ format_error(UnknownReason) ->
     Message = merlin_lib:format_error(UnknownReason),
     io_lib:format("Unknown error: ~s", [Message]).
 
-transforme_pin_operator(enter, ?QQ("_@Function"), State)
+transform(Forms, State) ->
+    merlin:transform(Forms, fun transform_pin_operator/3, State).
+
+transform_pin_operator(enter, ?QQ("_@Function"), State)
     when erl_syntax:type(Function) =:= function
 ->
     {continue, Function, State#{
@@ -46,29 +47,38 @@ transforme_pin_operator(enter, ?QQ("_@Function"), State)
             )
         )
     }};
-transforme_pin_operator(enter, ?QQ("_@Pattern0 = _@Body0"), State) ->
+transform_pin_operator(enter, ?QQ("_@Pattern0 = _@Body0"), State) ->
     ?with [_ ||
-        {[Body1], State1} = transform([Body0], State),
-        {[Pattern1], State2} = transform([Pattern0], State1),
-        Match0 = erl_syntax:match_expr(Pattern1, Body1),
-        Match1 = erl_syntax:copy_attrs(__NODE__, Match0),
-        {return, Match1, State2}
+        {[Body1], State1} <- transform([Body0], State),
+        {[Pattern1], State2} <- transform([Pattern0], State1),
+        {Pattern1, Body1, State2}
     ] of
-        Return ->
-            Return
+        {Pattern2, Body2, State3} ->
+            {return, ?QQ("_@Pattern2 = _@Body2"), State3}
     ?else
-        {warning, Forms, Warnings} ->
-            Warnings1 = revert_exceptions(Warnings, warning),
-            {exceptions, Warnings1, Forms, State};
-        {error, Errors, Warnings} ->
-            Errors1 = revert_exceptions(Errors, error),
-            Warnings1 = revert_exceptions(Warnings, warning),
-            {exceptions, Errors1 ++ Warnings1, __NODE__, State};
+        {Failure, State4} when is_map(State4) ->
+            {parse_transform, Failure, State4};
         Unknown ->
-            {error, {unknow_return, Unknown}}
-
+            {error, {unknown_return, Unknown}}
     end;
-transforme_pin_operator(leaf, ?QQ("_@Var"), State)
+transform_pin_operator(enter, ?QQ("_@Case"), State)
+    when erl_syntax:type(Case) ?in [case_expr, if_expr]
+->
+    {continue, __NODE__, State#{
+        previous => State
+    }};
+transform_pin_operator(enter, ?QQ("_@Case"), State)
+    when erl_syntax:type(Case) =:= clause
+->
+    case State of
+        #{ previous := #{ auto_bindings := Bindings } } ->
+            {continue, __NODE__, State#{
+                auto_bindings := Bindings
+            }};
+        _ ->
+            continue
+    end;
+transform_pin_operator(leaf, ?QQ("_@Var"), State)
     when auto_incrementable(Var)
 ->
     #{ auto_bindings := Bindings } = State,
@@ -77,7 +87,7 @@ transforme_pin_operator(leaf, ?QQ("_@Var"), State)
     Var1 = erl_syntax:variable(Name ++ integer_to_list(NextIndex)),
     Var2 = erl_syntax:copy_attrs(Var, Var1),
     {Var2, State#{ auto_bindings := Bindings#{ Name => NextIndex } }};
-transforme_pin_operator(leaf, ?QQ("_@Var"), State)
+transform_pin_operator(leaf, ?QQ("_@Var"), State)
     when is_pinnable(Var)
 ->
     #{
@@ -97,16 +107,23 @@ transforme_pin_operator(leaf, ?QQ("_@Var"), State)
             CurrentVar = erl_syntax:variable(Name ++ integer_to_list(Index)),
             erl_syntax:copy_attrs(Var, CurrentVar)
     end;
-transforme_pin_operator(leaf, ?QQ("_@Var"), State)
+transform_pin_operator(leaf, ?QQ("_@Var"), State)
     when erl_syntax:type(Var) =:= variable
 ->
     #{ auto_bindings := Bindings } = State,
-    Name = erl_syntax:variable_name(Var),
+    Name = erl_syntax:variable_literal(Var),
     case maps:is_key(Name, Bindings) of
         false -> continue;
         true -> {error, {ambiguous_binding_usage, Name}}
     end;
-transforme_pin_operator(_, _, _) ->
+transform_pin_operator(
+    exit,
+    ?QQ("_@Case"),
+    State
+) when erl_syntax:type(Case) =:= case_expr ->
+    PreviousState = maps:get(previous, State),
+    {continue, __NODE__, PreviousState};
+transform_pin_operator(_, _, _) ->
     continue.
 
 auto_incrementable(Var) ->
@@ -116,10 +133,3 @@ auto_incrementable(Var) ->
 is_pinnable(Var) ->
     erl_syntax:type(Var) =:= variable
     andalso lists:suffix("_", erl_syntax:variable_literal(Var)).
-
-revert_exceptions(Exceptions, Type) ->
-    [
-        {Type, Marker}
-    ||
-        {_File, Marker} <- Exceptions
-    ].

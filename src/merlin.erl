@@ -21,6 +21,11 @@
     transformer_return/1
 ]).
 
+-export_type([
+    exceptions_grouped_by_file/0,
+    parse_transform_return/0
+]).
+
 -define(else, true).
 
 

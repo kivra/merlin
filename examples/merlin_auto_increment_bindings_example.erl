@@ -26,3 +26,27 @@ match() ->
         _ ->
             []
     end.
+
+complex(Ctx@, #{ first_name := FirstName, last_name := LastName } = User@)
+    when not is_map_key(id, User_)
+->
+    Id@ = db:generate_id(),
+    User@ = User_#{ id => Id_, name => io_lib:format("~s ~s", [FirstName, LastName]) },
+    case db:save(Ctx_, User_) of
+        {ok, {Ctx@, User@}} ->
+            {Ctx_, User_};
+        {error, {unique_violation, Id_}} ->
+            Id@ = db:generete_id(),
+            %% Try one extra time
+            complex(Ctx_, User_#{ id := Id_ });
+        {error, _} = Error ->
+            Error
+    end;
+complex(Ctx@, #{ first_name := FirstName, last_name := LastName } = User@) ->
+    User@ = User_#{ name => io_lib:format("~s ~s", [FirstName, LastName]) },
+    case db:save(Ctx_, User_) of
+        {ok, {Ctx@, User@}} ->
+            {Ctx_, User_};
+        {error, _} = Error ->
+            Error
+    end.
