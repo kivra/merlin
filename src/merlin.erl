@@ -404,14 +404,20 @@ format_markers(Reasons, Node, State) ->
 %%% @private
 -spec format_marker(error,   term(), ast(), #state{}) -> error_marker();
                    (warning, term(), ast(), #state{}) -> warning_marker().
-format_marker(Type, {File, {Position, FormattingModule, _Reason}} = Marker, _Node, #state{})
+format_marker(Type, {File, {Position, FormattingModule, _Reason} = Marker}, _Node, #state{} = State)
 when
     (Type == error orelse Type == warning) andalso
     (File == [] orelse is_integer(hd(File))) andalso
     (is_integer(Position) orelse is_integer(element(1, Position))) andalso
     is_atom(FormattingModule)
 ->
-    {Type, Marker};
+    case File of
+        [] ->
+            %% Rebar crashes on empty `file`
+            {Type, {State#state.file, Marker}};
+        _ ->
+            {Type, Marker}
+    end;
 format_marker(Type, Reason, Node, #state{
     file=File,
     transformer=Transformer
