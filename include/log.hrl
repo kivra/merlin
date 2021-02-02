@@ -90,3 +90,8 @@
     erlang:apply(io, format, erlang:tuple_to_list(merlin_internal:format_forms({??Forms " = ", Forms}))),
     io:nl()
 end).
+
+-define(var(Term), begin
+    io:format("~s =~n~p~n", [??Term, Term]),
+    Term
+end).
