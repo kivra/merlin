@@ -117,7 +117,7 @@ transform(Forms, Transformer, Extra) when is_function(Transformer, 3) ->
             file => InternalState#state.file,
             line => none,
             module => InternalState#state.module,
-            tranasformer => merlin_lib:fun_to_mfa(Transformer)
+            transformer => merlin_lib:fun_to_mfa(Transformer)
         }
     }),
     ?notice(
