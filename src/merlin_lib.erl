@@ -18,14 +18,12 @@
     erl_error_format/2,
     format_error_marker/2,
     fun_to_mfa/1,
-    split_by/2,
-    simplify_forms/1
+    split_by/2
 ]).
 
 -export([
     get_annotation/2,
     get_annotation/3,
-    legacy_anno/1,
     set_annotation/3,
     update_annotation/2
 ]).
@@ -104,19 +102,6 @@ safe_value(Node) when is_tuple(Node) ->
     value(Node);
 safe_value(Value) ->
     Value.
-
-%% @doc Returns the given forms as {@link erl_parse} forms with their {@link
-%% erl_anno} set to just location. This allow older code, that doesn't handle
-%% the new annotaions, to still be called.
-simplify_forms(Forms0) ->
-    {Forms1, _} = merlin:transform(Forms0, fun legacy_anno/3, '_'),
-    merlin:revert(Forms1).
-
-legacy_anno(Node) ->
-    erl_syntax:set_pos(Node, erl_anno:location(erl_syntax:get_pos(Node))).
-
-legacy_anno(_, Node, _) ->
-    legacy_anno(Node).
 
 %%% @doc Callback for formatting error messages from this module
 %%%
@@ -263,11 +248,11 @@ is_erl_anno({_Key, _Value}) -> false.
 get_erl_anno(file, Anno) ->
     erl_anno:file(Anno);
 get_erl_anno(generated, Anno) ->
-    erl_anno:generated(Anno);
+    erl_anno:generated(Anno) orelse undefined;
 get_erl_anno(location, Anno) ->
     erl_anno:location(Anno);
 get_erl_anno(record, Anno) ->
-    erl_anno:record(Anno);
+    erl_anno:record(Anno) orelse undefined;
 get_erl_anno(text, Anno) ->
     erl_anno:text(Anno);
 get_erl_anno(_, _) ->
