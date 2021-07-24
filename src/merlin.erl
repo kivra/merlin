@@ -678,16 +678,16 @@ list_phrase(List) ->
 -spec return(parse_transform_return() | {parse_transform_return(), State}) -> parse_transform_return()
 when State :: term().
 return({Result, _State}) ->
-    merlin_internal:write_log_file(),
+    _ = merlin_internal:write_log_file(),
     return(Result);
 return({warning, Tree, Warnings}) ->
-    merlin_internal:write_log_file(),
+    _ = merlin_internal:write_log_file(),
     {warning, revert(Tree), Warnings};
 return({error, _Error, _Warnings} = Result) ->
-    merlin_internal:write_log_file(),
+    _ = merlin_internal:write_log_file(),
     Result;
 return(Tree) ->
-    merlin_internal:write_log_file(),
+    _ = merlin_internal:write_log_file(),
     revert(Tree).
 
 %%% @private
