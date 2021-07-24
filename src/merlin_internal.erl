@@ -68,6 +68,40 @@ format_forms({Prefix, Forms}) ->
         Form <- lists:flatten([Forms])
     ]]}.
 
+%% @doc Returns the given stack trace into something nice, with colors and all.
+%% This makes it more amenable for reading, and also openable in your
+%% favorite editor.
+-spec format_stack([Frame]) -> iolist()
+when
+    Frame :: {module(), FunctionName, ArityOrArguments, Location},
+    FunctionName :: atom(),
+    ArityOrArguments :: arity() | [term()],
+    Location :: [{file, string()} | {line, pos_integer()}].
+format_stack(StackTrace) ->
+    %% Use dimmed to make it usable on both light and dark backgrounds.
+    Dimmed = "\e[2;39m",
+    Normal = "\e[0m",
+    [
+        if is_integer(ArityOrArguments) ->
+            io_lib:format("  ~s:~s/~p ~sin~s ~s:~p~n", [
+                    Module, Function, ArityOrArguments,
+                    Dimmed, Normal,
+                    proplists:get_value(file, Location, none),
+                    proplists:get_value(line, Location, none)
+                ]);
+        true ->
+            io_lib:format("  ~s:~s/~p ~swith~s ~tw ~sin~s ~s:~p~n", [
+                    Module, Function, length(ArityOrArguments),
+                    Dimmed, Normal, ArityOrArguments,
+                    Dimmed, Normal,
+                    proplists:get_value(file, Location, none),
+                    proplists:get_value(line, Location, none)
+                ])
+        end
+    ||
+        {Module, Function, ArityOrArguments, Location} <- StackTrace
+    ].
+
 %% @doc Formats the given exception using {@link erl_error}.
 %% It is guaranteed to keep it all on a single line.
 -if(?OTP_RELEASE >= 24).
@@ -167,37 +201,3 @@ fun_to_mfa(Fun) when is_function(Fun) ->
         arity := Arity
     } = maps:from_list(erlang:fun_info(Fun)),
     {Module, Name, Arity}.
-
-%% @doc Returns the given stack trace into something nice, with colors and all.
-%% This makes it more amedable for reading, and also openable in your
-%% favorite editor.
--spec format_stack([Frame]) -> iolist()
-when
-    Frame :: {module(), FunctionName, ArityOrArguments, Location},
-    FunctionName :: atom(),
-    ArityOrArguments :: arity() | [term()],
-    Location :: [{file, string()} | {line, pos_integer()}].
-format_stack(StackTrace) ->
-    %% Use dimmed to make it usable on both light and dark backgrounds.
-    Dimmed = "\e[2;39m",
-    Normal = "\e[0m",
-    [
-        if is_integer(ArityOrArguments) ->
-            io_lib:format("  ~s:~s/~p ~sin~s ~s:~p~n", [
-                    Module, Function, ArityOrArguments,
-                    Dimmed, Normal,
-                    proplists:get_value(file, Location, none),
-                    proplists:get_value(line, Location, none)
-                ]);
-        true ->
-            io_lib:format("  ~s:~s/~p ~swith~s ~tw ~sin~s ~s:~p~n", [
-                    Module, Function, length(ArityOrArguments),
-                    Dimmed, Normal, ArityOrArguments,
-                    Dimmed, Normal,
-                    proplists:get_value(file, Location, none),
-                    proplists:get_value(line, Location, none)
-                ])
-        end
-    ||
-        {Module, Function, ArityOrArguments, Location} <- StackTrace
-    ].
