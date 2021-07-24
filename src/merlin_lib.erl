@@ -21,6 +21,7 @@
 -export([
     get_annotation/2,
     get_annotation/3,
+    get_annotations/1,
     set_annotation/3,
     update_annotation/2
 ]).
@@ -34,8 +35,8 @@
 -export([
     add_binding/2,
     add_bindings/2,
-    bindings_with_type/1,
-    get_bindings/1
+    get_bindings/1,
+    get_bindings_with_type/1
 ]).
 
 -export([
@@ -145,7 +146,7 @@ keyfind(List, Key, Default) ->
 %%%
 %%% @see with_bindings/2
 %%% @see erl_syntax_lib:annotate_bindings/2
-bindings_with_type(Form) ->
+get_bindings_with_type(Form) ->
     #{
         env := Env,
         bound := Bound,
@@ -195,7 +196,7 @@ update_annotation(Form, NewAnnotations) ->
     erl_syntax:set_ann(Form1, maps:to_list(UpdatedErlSyntax)).
 
 %% @private
-%% @doc Returns all annotaions from {@link erl_anno} and {@link erl_synatx}.
+%% @doc Returns all annotations from {@link erl_anno} and {@link erl_syntax}.
 get_annotations_internal(Form) ->
     Anno = erl_syntax:get_pos(Form),
     ErlAnno = [
@@ -210,7 +211,7 @@ get_annotations_internal(Form) ->
         ordsets:intersection(
             ?ERL_ANNO_KEYS, ordsets:from_list(maps:keys(ErlSyntax))
         ),
-        "erl_anno keys must not be saved as erl_synax annotations"
+        "erl_anno keys must not be saved as erl_syntax annotations"
     ),
     {ErlAnno, ErlSyntax}.
 
