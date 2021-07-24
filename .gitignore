@@ -7,3 +7,5 @@ typer_results.erl
 console.log
 
 priv/sys.config
+
+doc/
