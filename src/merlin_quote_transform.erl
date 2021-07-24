@@ -216,7 +216,7 @@ check_only_one_quote_pattern(Clauses) ->
                 [_] -> false;
                 [_|Patterns] ->
                     {true, [
-                        merlin_lib:format_error_marker(
+                        merlin_lib:into_error_marker(
                             "only one quote pattern allowed",
                             Pattern
                         )

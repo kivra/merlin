@@ -15,7 +15,7 @@
 ]).
 
 -export([
-    format_error_marker/2,
+    into_error_marker/2
 ]).
 
 -export([
@@ -115,15 +115,15 @@ format_error(Message0) ->
         nomatch -> Message1
     end.
 
--spec format_error_marker(Reason, Stacktrace | Node) -> merlin:error_marker() when
+-spec into_error_marker(Reason, Stacktrace | Node) -> merlin:error_marker() when
     Reason :: term(),
     Stacktrace :: list({module(), atom(), arity(), [{atom(), term()}]}),
     Node :: merlin:ast().
-format_error_marker(Reason, [{_Module, _Function, _Arity, Location}|_]) ->
+into_error_marker(Reason, [{_Module, _Function, _Arity, Location}|_]) ->
     File = keyfind(Location, file, none),
     Line = keyfind(Location, line, 0),
     {error, {File, {Line, ?MODULE, Reason}}};
-format_error_marker(Reason, Node) when is_tuple(Node) ->
+into_error_marker(Reason, Node) when is_tuple(Node) ->
     File = get_annotation(Node, file),
     Position = erl_syntax:get_pos(Node),
     {error, {File, {Position, ?MODULE, Reason}}}.

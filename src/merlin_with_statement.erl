@@ -59,7 +59,7 @@ transform_with_statement(
         , "end"]),
     State
 ) ->
-    merlin_lib:format_error_marker(
+    merlin_lib:into_error_marker(
         "list comprehension head must be _, the anonymous variable",
         merlin_lib:set_annotation(
             Head, file, merlin_lib:get_annotation(__NODE__, file)
