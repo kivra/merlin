@@ -7,8 +7,11 @@
 -export([
     format_forms/1,
     format_stack/1,
+    format_using_erl_error/2,
+    fun_to_mfa/1,
     log_macro/4,
     pretty/1,
+    split_by/2,
     write_log_file/0
 ]).
 
@@ -65,6 +68,32 @@ format_forms({Prefix, Forms}) ->
         Form <- lists:flatten([Forms])
     ]]}.
 
+%% @doc Formats the given exception using {@link erl_error}.
+%% It is guaranteed to keep it all on a single line.
+-if(?OTP_RELEASE >= 24).
+format_using_erl_error(Reason, StackTrace) ->
+    Class = error,
+    %% Ignore all frames to keep the message on one line
+    StackFilter = fun(_M, _F, _A) -> true end,
+    Formatter = fun(Term, _Indent) -> io_lib:format("~tp", [Term]) end,
+    Options = #{
+         stack_trim_fun => StackFilter,
+        format_fun => Formatter
+    },
+    erl_error:format_exception(Class, Reason, StackTrace, Options).
+-else.
+format_using_erl_error(Reason, StackTrace) ->
+    Indent = 1,
+    Class = error,
+    %% Ignore all frames to keep the message on one line
+    StackFilter = fun(_M, _F, _A) -> true end,
+    Formatter = fun(Term, _Indent) -> io_lib:format("~tp", [Term]) end,
+    Encoding = utf8,
+    erl_error:format_exception(
+        Indent, Class, Reason, StackTrace, StackFilter, Formatter, Encoding
+    ).
+-endif.
+
 %% @doc Renders the given AST using {@link erl_pp} or throws `invalid_form'.
 -spec pretty(merlin:ast() | [merlin:ast()]) -> iolist() | no_return().
 pretty(Nodes) when is_list(Nodes) ->
@@ -112,6 +141,32 @@ foldl_binary(Fun, AccIn, <<Char/utf8>>) ->
 foldl_binary(Fun, AccIn, <<Char/utf8, Rest/binary>>) ->
     AccOut = Fun(Char, AccIn),
     foldl_binary(Fun, AccOut, Rest).
+
+%% @doc Splits `List' using `Fun' at the element for which it returns `true'.
+%% That element then returned together with the element in question.
+%% If there's no such element, this returns `undefined' instead.
+-spec split_by(List, fun((Element) -> boolean())) -> {List, Element, List} when
+    List :: [Element],
+    Element :: term().
+split_by(List, Fun) when is_list(List) andalso is_function(Fun, 1) ->
+    split_by(List, Fun, []).
+
+split_by([], _Fun, Acc) ->
+    {lists:reverse(Acc), undefined, []};
+split_by([Head|Tail], Fun, Acc) ->
+    case Fun(Head) of
+        true  -> {lists:reverse(Acc), Head, Tail};
+        false -> split_by(Tail, Fun, [Head|Acc])
+    end.
+
+%% @doc Returns the MFA tuple for the given `fun'.
+fun_to_mfa(Fun) when is_function(Fun) ->
+    #{
+        module := Module,
+        name := Name,
+        arity := Arity
+    } = maps:from_list(erlang:fun_info(Fun)),
+    {Module, Name, Arity}.
 
 %% @doc Returns the given stack trace into something nice, with colors and all.
 %% This makes it more amedable for reading, and also openable in your

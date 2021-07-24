@@ -117,12 +117,12 @@ transform(Forms, Transformer, Extra) when is_function(Transformer, 3) ->
             file => InternalState#state.file,
             line => none,
             module => InternalState#state.module,
-            transformer => merlin_lib:fun_to_mfa(Transformer)
+            transformer => merlin_internal:fun_to_mfa(Transformer)
         }
     }),
     ?notice(
         "Transforming using ~s:~s/~p",
-        tuple_to_list(merlin_lib:fun_to_mfa(Transformer))
+        tuple_to_list(merlin_internal:fun_to_mfa(Transformer))
     ),
     ?show(Forms),
     {TransformedTree, FinalState} = try

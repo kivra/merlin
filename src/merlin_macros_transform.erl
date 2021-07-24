@@ -62,7 +62,7 @@ eval(Body, Options) ->
         )
     catch error:Reason:Stack ->
         StackTrace = ensure_location(Merl, Stack),
-        Message = merlin_lib:erl_error_format(Reason, StackTrace),
+        Message = merlin_internal:format_using_erl_error(Reason, StackTrace),
         merlin_lib:format_error_marker(Message, StackTrace)
     end.
 

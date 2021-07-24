@@ -15,10 +15,7 @@
 ]).
 
 -export([
-    erl_error_format/2,
     format_error_marker/2,
-    fun_to_mfa/1,
-    split_by/2
 ]).
 
 -export([
@@ -140,25 +137,6 @@ keyfind(List, Key, Default) ->
                 Value -> Value
             end
     end.
-
-erl_error_format(Reason, StackTrace) ->
-    Indent = 1,
-    Class = error,
-    %% Ignore all frames to keep the message on one line
-    StackFilter = fun(_M, _F, _A) -> true end,
-    Formatter = fun(Term, _Indent) -> io_lib:format("~tp", [Term]) end,
-    Encoding = utf8,
-    erl_error:format_exception(
-        Indent, Class, Reason, StackTrace, StackFilter, Formatter, Encoding
-    ).
-
-fun_to_mfa(Fun) when is_function(Fun) ->
-    #{
-        module := Module,
-        name := Name,
-        arity := Arity
-    } = maps:from_list(erlang:fun_info(Fun)),
-    {Module, Name, Arity}.
 
 %%% @doc Get all bindings associated with the given `Form'.
 %%%
@@ -313,17 +291,6 @@ value(Node) ->
                 false -> error({badvalue, Node})
             end;
         false -> error({badvalue, Node})
-    end.
-
-split_by(List, Fun) when is_list(List) andalso is_function(Fun, 1) ->
-    split_by(List, Fun, []).
-
-split_by([], _Fun, Acc) ->
-    {lists:reverse(Acc), undefined, []};
-split_by([Head|Tail], Fun, Acc) ->
-    case Fun(Head) of
-        true  -> {lists:reverse(Acc), Head, Tail};
-        false -> split_by(Tail, Fun, [Head|Acc])
     end.
 
 add_new_variable(Bindings) ->

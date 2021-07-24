@@ -23,7 +23,7 @@ transformer(enter, ?QQ("_@Needle and merlin_in_transform:'IN'(_@ExpressionAST)")
     {ok, Tokens, _} = erl_scan:string(
         ExpressionSource, erl_syntax:get_pos(ExpressionAST)
     ),
-    {LowTokens, {Kind, _}, HighTokens} = merlin_lib:split_by(
+    {LowTokens, {Kind, _}, HighTokens} = merlin_internal:split_by(
         Tokens, fun is_range_op/1
     ),
     case {parse(LowTokens, File), Kind, parse(HighTokens, File)} of
