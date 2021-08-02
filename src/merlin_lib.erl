@@ -379,6 +379,6 @@ add_bindings(BindingsOrForm, NewBindings) ->
         false ->
             update_annotation(
                 BindingsOrForm,
-                add_binding(get_annotations(BindingsOrForm), NewBindings)
+                add_bindings(get_annotations(BindingsOrForm), NewBindings)
             )
     end.
