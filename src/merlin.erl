@@ -560,8 +560,20 @@ annotate(ModuleForms, Options) ->
     State = maps:merge(maps:from_list(proplists:unfold(Options)), #{
         analysis => analyze(ModuleForms)
     }),
-    {Forms, _} = transform(ModuleForms, fun annotate_internal/3, State),
-    Forms.
+    {Forms, #{analysis := Analysis}} = transform(ModuleForms, fun annotate_internal/3, State),
+    [
+        case
+            erl_syntax:type(Form) =:= attribute andalso
+            merlin_lib:value(erl_syntax:attribute_name(Form)) =:= module
+        of
+            true ->
+                merlin_lib:set_annotation(Form, analysis, Analysis);
+            false ->
+                Form
+        end
+    ||
+        Form <- Forms
+    ].
 
 annotate_internal(enter, Form0, #{ analysis := Analysis0 } = State0) ->
     Analysis1 = case get_file_attribute(Form0) of
@@ -620,8 +632,6 @@ annotate_form(function, Form, #{
     ?else ->
         Form2
     end;
-annotate_form(module, Form, #{ analysis := Analysis }) ->
-    merlin_lib:set_annotation(Form, analysis, Analysis);
 annotate_form(_, Form, _) -> Form.
 
 resolve_call(Node, #{
