@@ -312,20 +312,22 @@ attribute_filter(Name) ->
         value(erl_syntax:attribute_name(Node)) == Name
     end.
 
-%%% @doc Returns the value of the given literal node as an Erlang term.
-%%%
-%%% Raises `{badvalue, Node}' if the given `Node' is not an literal node.
+%% @doc Returns the value of the given literal node as an Erlang term.
+%%
+%% Raises `{badvalue, Node}' if the given `Node' is not an literal node.
 value(Node) ->
     case erl_syntax:is_literal(Node) of
         true ->
-            ValueFunction = binary_to_atom(iolist_to_binary(io_lib:format(
-                "~s_value", [erl_syntax:type(Node)]
-            )), utf8),
-            case erlang:function_exported(erl_syntax, ValueFunction, 1) of
-                true -> erl_syntax:ValueFunction(Node);
-                false -> error({badvalue, Node})
+            case erl_syntax:type(Node) of
+                atom -> erl_syntax:atom_value(Node);
+                integer -> erl_syntax:integer_value(Node);
+                float -> erl_syntax:float_value(Node);
+                char -> erl_syntax:char_value(Node);
+                string -> erl_syntax:string_value(Node);
+                _ -> error({badvalue, Node})
             end;
-        false -> error({badvalue, Node})
+        false ->
+            error({badvalue, Node})
     end.
 
 %% @doc Same as {@link add_new_variable/3} with default prefix and suffix.
