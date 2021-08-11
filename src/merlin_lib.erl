@@ -5,7 +5,6 @@
 -export([
     file/1,
     module/1,
-    quote/3,
     value/1
 ]).
 
@@ -135,23 +134,6 @@ module(Forms) ->
             erl_syntax:atom_value(ModuleAttribute);
         _ -> ''
     end.
-
-quote(File0, Line0, Source0) ->
-    File1 = safe_value(File0),
-    Line1 = safe_value(Line0),
-    Source1 = safe_value(Source0),
-    try
-        merl:quote(Line1, Source1)
-    of AST ->
-        {ok, AST}
-    catch throw:{error, SyntaxError} ->
-        {error, {File1, {Line1, ?MODULE, SyntaxError}}}
-    end.
-
-safe_value(Node) when is_tuple(Node) ->
-    value(Node);
-safe_value(Value) ->
-    Value.
 
 %%% @doc Callback for formatting error messages from this module
 %%%

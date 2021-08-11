@@ -14,6 +14,7 @@
     log_macro/4,
     pretty/1,
     print_stacktrace/1,
+    quote/3,
     split_by/2,
     write_log_file/0
 ]).
@@ -252,3 +253,29 @@ export_all(Module) when is_atom(Module) ->
         AST, [export_all, nowarn_export_all, return|Options]
     ),
     code:load_binary(Module, Beamfile, Beam1).
+
+%% @doc Works like {@link merl:quote/1}, but also accepts
+%% {@link erl_syntax:string/1 .string nodes}. Instead of throwing
+%% `{error, Reason}', it returns a valid
+%% <a href="https://erlang.org/doc/man/erl_parse.html#errorinfo">
+%% error info</a>.
+%%
+%% The first argument is a file string (or node) and is used for the
+%% <a href="https://erlang.org/doc/man/erl_parse.html#errorinfo">
+quote(File0, Line0, Source0) ->
+    File1 = safe_value(File0),
+    Line1 = safe_value(Line0),
+    Source1 = safe_value(Source0),
+    try
+        merl:quote(Line1, Source1)
+    of AST ->
+        {ok, AST}
+    catch throw:{error, SyntaxError} ->
+        {error, {File1, {Line1, ?MODULE, SyntaxError}}}
+    end.
+
+%% @private
+safe_value(Node) when is_tuple(Node) ->
+    merlin_lib:value(Node);
+safe_value(Value) ->
+    Value.
