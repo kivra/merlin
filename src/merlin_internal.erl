@@ -12,6 +12,7 @@
     fun_to_mfa/1,
     log_macro/4,
     pretty/1,
+    print_stacktrace/1,
     split_by/2,
     write_log_file/0
 ]).
@@ -55,8 +56,8 @@ write_log_file() ->
 %% reverting} as needed, and finally just using `"~tp"' with {@link
 %% io_lib:format/2}.
 -spec format_forms({string(), merlin:ast() | [merlin:ast()] | term()}) -> {string(), [iolist()]}.
-format_forms({Prefix, Forms}) ->
-    {"~s~n~s", [Prefix, [
+format_forms({Prefix, Forms}) when is_list(Prefix) ->
+    {"~s~n~s", [Prefix, lists:join($\n, [
         try
             pretty(Form)
         catch
@@ -67,7 +68,9 @@ format_forms({Prefix, Forms}) ->
         end
     ||
         Form <- lists:flatten([Forms])
-    ]]}.
+    ])]};
+format_forms(Forms) ->
+    format_forms({"", Forms}).
 
 %% @doc Returns the given merl guard, at the given line, formatted using
 %% {@link merlin_merl:format/1}
@@ -100,6 +103,8 @@ when
     FunctionName :: atom(),
     ArityOrArguments :: arity() | [term()],
     Location :: [{file, string()} | {line, pos_integer()}].
+format_stack({current_stacktrace, StackTrace}) ->
+    format_stack(StackTrace);
 format_stack(StackTrace) ->
     %% Use dimmed to make it usable on both light and dark backgrounds.
     Dimmed = "\e[2;39m",
@@ -154,7 +159,7 @@ format_using_erl_error(Reason, StackTrace) ->
 %% @doc Renders the given AST using {@link erl_pp} or throws `invalid_form'.
 -spec pretty(merlin:ast() | [merlin:ast()]) -> iolist() | no_return().
 pretty(Nodes) when is_list(Nodes) ->
-    lists:foreach(fun pretty/1, Nodes);
+    lists:map(fun pretty/1, Nodes);
 pretty(Node) ->
     Columns = case io:columns() of
         {ok, Value} -> Value;
@@ -172,6 +177,12 @@ pretty(Node) ->
         true -> throw(invalid_form);
         false -> IOList
     end.
+
+print_stacktrace({current_stacktrace, StackTrace}) ->
+    io:format("~s~n", [format_stack(StackTrace)]);
+print_stacktrace(Forms) ->
+    {Format, Args} = format_forms(Forms),
+    io:format(Format, Args).
 
 is_invalid(IOList) ->
     foldl_iolist(fun match_prefix/2, "INVALID-FORM", IOList).
