@@ -6,6 +6,7 @@
 
 -export([
     format_forms/1,
+    format_merl_guard/2,
     format_stack/1,
     format_using_erl_error/2,
     fun_to_mfa/1,
@@ -67,6 +68,28 @@ format_forms({Prefix, Forms}) ->
     ||
         Form <- lists:flatten([Forms])
     ]]}.
+
+%% @doc Returns the given merl guard, at the given line, formatted using
+%% {@link merlin_merl:format/1}
+format_merl_guard(Line, GuardSource) ->
+    ExpandedMerlMacros = re:replace(
+        GuardSource,
+        %% Matches ?Q(...) calls
+        "\\? *Q *\\( *(.+?) *\\)",
+        %% and expands them like merl does
+        "merl:quote(\\1)",
+        [global, {return, list}]
+    ),
+    %% To make merl parse the pattern we need to make it a valid clause first
+    Clause = merl:quote(Line, ExpandedMerlMacros ++ " -> ok"),
+    %% We format the whole clause, revert merl:quote to their macro form,
+    %% strip that extra body we added and finally compress it into one line.
+    FormattedClause0 = merlin_merl:format(Clause),
+    FormattedClause1 = string:replace(FormattedClause0, "merl:quote", "?Q", all),
+    FormattedClause2 = re:replace(
+        FormattedClause1, " *->\\s+ok\\s+$", "", [multiline]
+    ),
+    re:replace(FormattedClause2, "\\s+", " ", [multiline]).
 
 %% @doc Returns the given stack trace into something nice, with colors and all.
 %% This makes it more amenable for reading, and also openable in your
