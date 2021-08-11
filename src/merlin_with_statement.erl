@@ -22,11 +22,11 @@ parse_transform(Forms, Options) ->
 
 transform_with_statement(
     enter,
-    ?QQ([ "'@Name'(_@Args) when _@__@Guard -> _@_@Body." ]),
+    ?QQ([ "'@Name'(_@Args) when _@__@Guard -> _@_@Body." ]) = Form,
     State
 ) ->
-    {continue, __NODE__, State#{
-        bindings => erl_syntax_lib:variables(__NODE__)
+    {continue, Form, State#{
+        bindings => erl_syntax_lib:variables(Form)
     }};
 transform_with_statement(
     enter,
@@ -56,13 +56,13 @@ transform_with_statement(
         , "    _@@_"
         , "] of"
         , "    _@_ -> _@__"
-        , "end"]),
-    State
+        , "end"]) = Form,
+    _State
 ) ->
     merlin_lib:into_error_marker(
         "list comprehension head must be _, the anonymous variable",
         merlin_lib:set_annotation(
-            Head, file, merlin_lib:get_annotation(__NODE__, file)
+            Head, file, merlin_lib:get_annotation(Form, file)
         )
     );
 transform_with_statement(_, _, _) -> continue.
@@ -81,11 +81,7 @@ partition_cases([Case|Rest], SuccessCases) ->
     end.
 
 error_case_type([]) -> undefined;
-error_case_type([Single]) ->
-    case Single of
-        ?QQ("_ -> _@_") -> match_all;
-        _ -> match_pattern
-    end;
+error_case_type([?QQ("_ -> _@_")]) -> match_all;
 error_case_type(_) -> match_pattern.
 
 success_case_type(?QQ("_ -> _")) -> undefined;
@@ -223,31 +219,25 @@ wrap_list_comprehension_expression(Form) ->
 
 combine_begins([]) -> [];
 combine_begins([Form]) -> [Form];
-combine_begins([First, Second|Tail]) ->
-    case First of
-        ?QQ([ "begin"
-            , "    _@@FirstForm,"
-            , "    true"
-            , "end" ])
-        ->
-            case Second of
-                ?QQ([ "begin"
-                    , "    _@@SecondForm,"
+combine_begins([
+    ?QQ([ "begin"
+        , "    _@@FirstForm,"
+        , "    true"
+        , "end" ]),
+    ?QQ([ "begin"
+        , "    _@@SecondForm,"
+        , "    true"
+        , "end" ])
+    | Tail
+]) ->
+    Combined = ?QQ([ "begin"
+                    , "    _@FirstForm,"
+                    , "    _@SecondForm,"
                     , "    true"
-                    , "end" ])
-                ->
-                    Combined = ?QQ([ "begin"
-                                   , "    _@FirstForm,"
-                                   , "    _@SecondForm,"
-                                   , "    true"
-                                   , "end" ]),
-                    combine_begins([Combined|Tail]);
-                _ ->
-                    [First|combine_begins([Second|Tail])]
-            end;
-        _ ->
-            [First|combine_begins([Second|Tail])]
-    end.
+                    , "end" ]),
+    combine_begins([Combined|Tail]);
+combine_begins([Form|Tail]) ->
+    [Form|combine_begins(Tail)].
 
 split(List) ->
     {Init, [Last]} = lists:split(length(List) - 1, List),

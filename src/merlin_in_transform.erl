@@ -11,14 +11,14 @@ parse_transform(Forms, _Options) ->
     File = merlin_lib:file(Forms),
     merlin:return(merlin:transform(Forms, fun transformer/3, File)).
 
-transformer(enter, ?QQ("_@Needle and merlin_in_transform:'IN'() and []"), File) ->
+transformer(enter, ?QQ("_@Needle and merlin_in_transform:'IN'() and []"), _File) ->
     {error, "empty list for `?in´ comparison"};
-transformer(enter, ?QQ("_@Needle and merlin_in_transform:'IN'() and [_@Single]"), File) ->
+transformer(enter, ?QQ("_@Needle and merlin_in_transform:'IN'() and [_@Single]"), _File) ->
     {warning, "only one element in `?in` comparison", compare(Needle, Single)};
-transformer(enter, ?QQ("_@Needle and merlin_in_transform:'IN'() and [_@@Elements]"), File) ->
+transformer(enter, ?QQ("_@Needle and merlin_in_transform:'IN'() and [_@@Elements]") = Form, _File) ->
     [First|Rest] = [compare(Needle, Term) || Term <- Elements],
-    erl_syntax:copy_pos(__NODE__, lists:foldl(fun join/2, First, Rest));
-transformer(enter, ?QQ("_@Needle and merlin_in_transform:'IN'(_@ExpressionAST)"), File) ->
+    erl_syntax:copy_pos(Form, lists:foldl(fun join/2, First, Rest));
+transformer(enter, ?QQ("_@Needle and merlin_in_transform:'IN'(_@ExpressionAST)") = Form, File) ->
     ExpressionSource = merlin_lib:value(ExpressionAST),
     {ok, Tokens, _} = erl_scan:string(
         ExpressionSource, erl_syntax:get_pos(ExpressionAST)
@@ -28,7 +28,7 @@ transformer(enter, ?QQ("_@Needle and merlin_in_transform:'IN'(_@ExpressionAST)")
     ),
     case {parse(LowTokens, File), Kind, parse(HighTokens, File)} of
         {{error, LowError}, _, {error, HighError}} ->
-            {exceptions, [LowError, HighError], __NODE__, File};
+            {exceptions, [LowError, HighError], Form, File};
         {{error, LowError}, _, _} ->
             LowError;
         {_, _, {error, HighError}} ->

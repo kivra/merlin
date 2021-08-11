@@ -61,18 +61,18 @@ transform_pin_operator(enter, ?QQ("_@Pattern0 = _@Body0"), State) ->
         Unknown ->
             {error, {unknown_return, Unknown}}
     end;
-transform_pin_operator(enter, ?QQ("_@Case"), State)
+transform_pin_operator(enter, ?QQ("_@Case") = Form, State)
     when erl_syntax:type(Case) ?in [case_expr, if_expr]
 ->
-    {continue, __NODE__, State#{
+    {continue, Form, State#{
         previous => State
     }};
-transform_pin_operator(enter, ?QQ("_@Case"), State)
+transform_pin_operator(enter, ?QQ("_@Case") = Form, State)
     when erl_syntax:type(Case) =:= clause
 ->
     case State of
         #{ previous := #{ auto_bindings := Bindings } } ->
-            {continue, __NODE__, State#{
+            {continue, Form, State#{
                 auto_bindings := Bindings
             }};
         _ ->
@@ -116,13 +116,11 @@ transform_pin_operator(leaf, ?QQ("_@Var"), State)
         false -> continue;
         true -> {error, {ambiguous_binding_usage, Name}}
     end;
-transform_pin_operator(
-    exit,
-    ?QQ("_@Case"),
-    State
-) when erl_syntax:type(Case) =:= case_expr ->
+transform_pin_operator(exit, ?QQ("_@Case") = Form, State)
+    when erl_syntax:type(Case) =:= case_expr
+->
     PreviousState = maps:get(previous, State),
-    {continue, __NODE__, PreviousState};
+    {continue, Form, PreviousState};
 transform_pin_operator(_, _, _) ->
     continue.
 
