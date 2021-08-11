@@ -35,7 +35,9 @@
 -export([
     add_binding/2,
     add_bindings/2,
+    get_binding_type/2,
     get_bindings/1,
+    get_bindings_by_type/2,
     get_bindings_with_type/1
 ]).
 
@@ -203,32 +205,6 @@ keyfind(List, Key, Default) ->
                 Value -> Value
             end
     end.
-
-%%% @doc Get all bindings associated with the given `Form'.
-%%%
-%%% Returns a map from binding name to kind, prefering bound over env over
-%%% free.
-%%%
-%%% @see with_bindings/2
-%%% @see erl_syntax_lib:annotate_bindings/2
-get_bindings_with_type(Form) ->
-    #{
-        env := Env,
-        bound := Bound,
-        free := Free
-    } = get_annotations(Form),
-    Bindings = ordsets:union([
-        Env, Bound, Free
-    ]),
-    maps:from_list([
-        if
-            is_map_key(bound, Bound) -> {Binding, bound};
-            is_map_key(env, Env)     -> {Binding, env};
-            is_map_key(free, Free)   -> {Binding, free}
-        end
-    ||
-        Binding <- Bindings
-    ]).
 
 %%% @doc Returns the annotation for the given form,
 %%% or raises `{badkey, Annotation}' if not found.
@@ -506,10 +482,45 @@ var_name(Name) when is_atom(Name) ->
 var_name(Form) ->
     erl_syntax:variable_name(Form).
 
-%%% @doc Get all bindings associated with the given `Value'.
-get_bindings(#{ bindings := Bindings }) ->
-    Bindings;
-get_bindings(#{ env := Env, bound := Bound, free := Free }) ->
+%% @doc Get the type of the given binding in the given form.
+%% Prefering bound over env over free.
+%%
+%% @see erl_syntax_lib:annotate_bindings/2
+-spec get_binding_type(bindings_or_form(), atom()) -> bound | env | free | unknown.
+get_binding_type(#{bindings := Bindings}, Name) ->
+    get_binding_type(Bindings, Name);
+get_binding_type(#{bound := Bound, env := Env, free := Free}, Name) ->
+    case is_element(Bound, Name) of
+        true ->
+            bound;
+        false ->
+            case is_element(Env, Name) of
+                true ->
+                    env;
+                false ->
+                    case is_element(Free, Name) of
+                        true ->
+                            free;
+                        false ->
+                            unknown
+                    end
+            end
+    end;
+get_binding_type(BindingsOrForm, Name) ->
+    case sets:is_set(BindingsOrForm) of
+        true ->
+            unknown;
+        false ->
+            get_binding_type(get_annotations(BindingsOrForm), Name)
+    end.
+
+%% @doc Get all bindings for the given value.
+%% Can be a set of annotations, see {@ get_annotations/1}, {@link sets} set
+%% or {@link merlin:ast/0} form.
+-spec get_bindings(bindings_or_form()) -> sets:set(variable()).
+get_bindings(#{bindings := Bindings}) ->
+    get_bindings(Bindings);
+get_bindings(#{bound := Bound, env := Env, free := Free}) ->
     sets:from_list(lists:flatten([Env, Bound, Free]));
 get_bindings(BindingsOrForm) ->
     case sets:is_set(BindingsOrForm) of
@@ -517,6 +528,65 @@ get_bindings(BindingsOrForm) ->
             BindingsOrForm;
         false ->
             get_bindings(get_annotations(BindingsOrForm))
+    end.
+
+%% @doc Returns the bindings assosicated of the given `Type'
+-spec get_bindings_by_type(bindings(), Type) -> ordsets:ordset(atom()) when
+    Type :: bound | env | free.
+get_bindings_by_type(#{bindings := Bindings}, Type) when
+    ?is_binding_type(Type)
+->
+    get_binding_type(Bindings, Type);
+get_bindings_by_type(Bindings, Type) when
+    ?is_binding_type(Type) andalso is_map_key(Type, Bindings)
+->
+    lists:map(fun var_name/1, into_ordset(maps:get(Type, Bindings)));
+get_bindings_by_type(BindingsOrForm, Type) when ?is_binding_type(Type) ->
+    case sets:is_set(BindingsOrForm) of
+        true ->
+            error(badarg);
+        false ->
+            get_bindings_by_type(get_annotations(BindingsOrForm), Type)
+    end.
+
+%% @doc Get all bindings associated with the given `Form'.
+%%
+%% Returns a map from binding name to kind, prefering bound over env over
+%% free.
+%%
+%% @see erl_syntax_lib:annotate_bindings/2
+get_bindings_with_type(#{bindings := Bindings}) ->
+    get_bindings_with_type(Bindings);
+get_bindings_with_type(#{bound := Bound, env := Env, free := Free}) ->
+    Bindings = ordsets:union(lists:map(fun into_ordset/1, [
+        Env, Bound, Free
+    ])),
+    maps:from_list([
+        case is_element(Bound, Binding) of
+            true ->
+                {Binding, bound};
+            false ->
+                case is_element(Env, Binding) of
+                    true ->
+                        {Binding, bound};
+                    false ->
+                        case is_element(Free, Binding) of
+                            true ->
+                                {Binding, free};
+                            false ->
+                                error({missing_binding, Binding})
+                        end
+                end
+        end
+    ||
+        Binding <- Bindings
+    ]);
+get_bindings_with_type(BindingsOrForm) ->
+    case sets:is_set(BindingsOrForm) of
+        true ->
+            error(badarg);
+        false ->
+            get_bindings_with_type(get_annotations(BindingsOrForm))
     end.
 
 %% @doc Adds the given binding to the existing ones.
