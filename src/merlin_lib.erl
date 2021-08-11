@@ -150,6 +150,12 @@ format_error(Message0) ->
         nomatch -> Message1
     end.
 
+%% @doc Returns a
+%% <a href="https://erlang.org/doc/man/erl_parse.html#errorinfo">
+%% error info</a> with the given reason and location taken from the second
+%% argument. If it is a stacktrace, the latter is taken from the first frame.
+%% Otherwise it is assumed to be a {@link merlin:ast/0. syntax node} and its
+%% location is used.
 -spec into_error_marker(Reason, Stacktrace | Node) -> merlin:error_marker() when
     Reason :: term(),
     Stacktrace :: list({module(), atom(), arity(), [{atom(), term()}]}),
@@ -159,10 +165,12 @@ into_error_marker(Reason, [{_Module, _Function, _Arity, Location}|_]) ->
     Line = keyfind(Location, line, 0),
     {error, {File, {Line, ?MODULE, Reason}}};
 into_error_marker(Reason, Node) when is_tuple(Node) ->
-    File = get_annotation(Node, file),
+    File = get_annotation(Node, file, none),
     Position = erl_syntax:get_pos(Node),
     {error, {File, {Position, ?MODULE, Reason}}}.
 
+%% @private
+%% @doc Like {@link lists:keyfind/3} with a default value.
 keyfind(List, Key, Default) ->
     case lists:keyfind(Key, 1, List) of
         {Key, Value} -> Value;
