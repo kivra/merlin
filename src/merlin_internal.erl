@@ -5,6 +5,7 @@
 ]).
 
 -export([
+    export_all/1,
     format_forms/1,
     format_merl_guard/2,
     format_stack/1,
@@ -16,6 +17,10 @@
     split_by/2,
     write_log_file/0
 ]).
+
+-ifdef(MERLIN_INTERNAL_EXPORT_ALL).
+-compile([export_all, nowarn_export_all]).
+-endif.
 
 'DEFINE PROCEDURAL MACRO'(File, Line, Module, 'MERLIN INTERNAL DEFINE PROCEDURAL MACRO', 0, Macro, _BodyFun) ->
     Function = '',
@@ -235,3 +240,15 @@ fun_to_mfa(Fun) when is_function(Fun) ->
         arity := Arity
     } = maps:from_list(erlang:fun_info(Fun)),
     {Module, Name, Arity}.
+
+%% @doc Recompiles the given module with `export_all' set, allowing
+%% you to call private functions. This uses the `debug_info' in the beam
+%% file, so no source code needed.
+export_all(Module) when is_atom(Module) ->
+    Options = proplists:get_value(options, Module:module_info(compile)),
+    {Module, Beam0, Beamfile} = code:get_object_code(Module),
+    {ok, {_, [{abstract_code, {_, AST}}]}} = beam_lib:chunks(Beam0, [abstract_code]),
+    {ok, Module, Beam1, _Warnings} = compile:forms(
+        AST, [export_all, nowarn_export_all, return|Options]
+    ),
+    code:load_binary(Module, Beamfile, Beam1).
