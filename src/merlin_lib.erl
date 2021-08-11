@@ -35,6 +35,7 @@
 -export([
     add_binding/2,
     add_bindings/2,
+    annotate_bindings/1,
     get_binding_type/2,
     get_bindings/1,
     get_bindings_by_type/2,
@@ -481,6 +482,30 @@ var_name(Name) when is_atom(Name) ->
     Name;
 var_name(Form) ->
     erl_syntax:variable_name(Form).
+
+%% @doc Annotates the given form or forms using
+%% {@link erl_syntax_lib:annotate_bindings/2}.
+%%
+%% If given a form, it returns the same with the annotated bindings.
+%% If given a list of forms, a {@link erl_syntax:form_list/1. form list} is
+%% returned instead.
+%%
+%% It tries to find the `env' variables from the given form, or first form if
+%% given a list of forms. If none can be found it assumes there's no `env'
+%% variables.
+annotate_bindings(Forms0) when is_list(Forms0) ->
+    Forms1 = lists:flatten(Forms0),
+    Env = case Forms1 of
+        [Form|_] ->
+            get_annotation(Form, env, ordsets:new());
+        _ ->
+            ordsets:new()
+    end,
+    Tree = erl_syntax:form_list(Forms1),
+    erl_syntax_lib:annotate_bindings(Tree, Env);
+annotate_bindings(Form) ->
+    Env = get_annotation(Form, env, ordsets:new()),
+    erl_syntax_lib:annotate_bindings(Form, Env).
 
 %% @doc Get the type of the given binding in the given form.
 %% Prefering bound over env over free.
