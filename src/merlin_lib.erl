@@ -283,29 +283,36 @@ set_erl_anno({record, Record}, Anno) ->
 set_erl_anno({text, Text}, Anno) ->
     erl_anno:set_text(Text, Anno).
 
-%%% @doc Returns the argument to the first module attribute with the given
-%%% name, or Default if not found.
+%% @doc Returns the argument to the first module attribute with the given
+%% name, or Default if not found.
 -spec get_attribute(merlin:ast(), atom(), term()) -> term().
+get_attribute(Tree, Name, Default) when is_tuple(Tree) ->
+    get_attribute(lists:flatten(erl_syntax:subtrees(Tree)), Name, Default);
 get_attribute(Tree, Name, Default) ->
     case lists:search(attribute_filter(Name), Tree) of
         {value, Node} -> erl_syntax:attribute_arguments(Node);
         false -> Default
     end.
 
-%%% @doc Returns the arguments to all attributes with the given name in the
-%%% given list of forms.
-%%%
-%%% Returns the empty list if no such attributes are found.
+%% @doc Returns the arguments to all attributes with the given name in the
+%% given list of forms or subtrees of the given form.
+%%
+%% Returns the empty list if no such attributes are found.
+get_attributes(Tree, Name) when is_tuple(Tree) ->
+    get_attributes(lists:flatten(erl_syntax:subtrees(Tree)), Name);
 get_attributes(Tree, Name) ->
     lists:map(fun erl_syntax:attribute_arguments/1,
         get_attribute_forms(Tree, Name)
     ).
 
-%%% @doc Returns all attributes with the given name in the given list of forms.
+%% @doc Returns all attributes with the given name in the given list of forms
+%% or subtrees of the given form.
+get_attribute_forms(Tree, Name) when is_tuple(Tree) ->
+    get_attribute_forms(lists:flatten(erl_syntax:subtrees(Tree)), Name);
 get_attribute_forms(Tree, Name) ->
     lists:filter(attribute_filter(Name), Tree).
 
-%%% @private
+%% @private
 attribute_filter(Name) ->
     fun(Node) ->
         erl_syntax:type(Node) == attribute andalso
