@@ -1,12 +1,12 @@
 -module(merlin).
 
--include("log.hrl").
-
 -export([
     annotate/1,
     annotate/2,
     analyze/1,
     analyze/2,
+    find_form/2,
+    find_forms/2,
     transform/3,
     revert/1,
     return/1
@@ -26,8 +26,9 @@
     parse_transform_return/0
 ]).
 
--define(else, true).
+-include("log.hrl").
 
+-define(else, true).
 
 -record(state, {
     file :: string(),
@@ -481,6 +482,49 @@ ungroup_exceptions(Type, Groups) ->
         {File, Markers} <- Groups,
         Marker <- Markers
     ].
+
+%% @doc Returns the first form for which the given function returns true.
+%% This returns a `{ok, Form}' tuple on success, and `{error, notfound}`
+%% otherwise.
+find_form(Forms, Fun) when is_function(Fun, 1) ->
+    try transform(Forms, fun find_form_transformer/3, Fun) of
+        _ -> {error, notfound}
+    catch
+        %% Use the `fun' in the pattern to make it less likely to accidentally
+        %% catch something.
+        error:{found, Fun, Form} -> {ok, Form}
+    end.
+
+%% @private
+find_form_transformer(Phase, Form, Fun) when Phase =:= enter orelse Phase =:= leaf ->
+    case Fun(Form) of
+        true -> error({found, Fun, Form});
+        false -> continue
+    end;
+find_form_transformer(_ ,_, _) -> continue.
+
+%% @doc Returns a flat list with all forms for which the given function
+%% returns true, if any. They are returned in source order.
+find_forms(Forms, Fun) when is_function(Fun, 1) ->
+    {_, #{result := Result}} = transform(
+        Forms,
+        fun find_forms_transformer/3,
+        #{filter => Fun, result => []}
+    ),
+    lists:reverse(Result).
+
+%% @private
+find_forms_transformer(Phase, Form, #{filter := Fun, result := Result} = State)
+when
+    Phase =:= enter orelse Phase =:= leaf
+->
+    case Fun(Form) of
+        true ->
+            {continue, Form, State#{result := [Form|Result]}};
+        false ->
+            continue
+    end;
+find_forms_transformer(_ ,_, _) -> continue.
 
 %% @doc Like `erl_syntax_lib:analyze_forms' but returns maps.
 %% Also all fields are present, except `module' so you can determine if it
