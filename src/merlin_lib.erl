@@ -150,6 +150,14 @@ module_form(Forms) ->
             undefined
     end.
 
+%% @doc Updates the given form using the given groups or another form.
+%% This is a generalisation of {@link erl_syntax:update_tree/2}.
+update_tree(Node, Groups) when is_list(Groups) ->
+    erl_syntax:update_tree(Node, Groups);
+update_tree(Node, Form) when is_tuple(Form) ->
+    ?assertNodeType(Node, ?assertIsForm(Form)),
+    erl_syntax:update_tree(Node, erl_syntax:subtrees(Form)).
+
 %%% @doc Callback for formatting error messages from this module
 %%%
 %%% @see erl_parse:format_error/1
