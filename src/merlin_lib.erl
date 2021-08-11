@@ -5,6 +5,8 @@
 -export([
     file/1,
     module/1,
+    module_form/1,
+    update_tree/2,
     value/1
 ]).
 
@@ -125,14 +127,27 @@ file(Forms) ->
         [FileAttribute, _Line] -> erl_syntax:string_value(FileAttribute)
     end.
 
-%%% @doc Returns the module name for the first `-module' attribute in
-%%% `Forms', or <code>''</code> if not found.
+%% @doc Returns the module name for the first `-module' attribute in
+%% `Forms', or <code>''</code> if not found.
 -spec module([merlin:ast()]) -> module() | ''.
 module(Forms) ->
-    case get_attributes(Forms, module) of
-        [[ModuleAttribute|_MaybeParameterizedModuleArgument]|_] ->
-            erl_syntax:atom_value(ModuleAttribute);
-        _ -> ''
+    case module_form(Forms) of
+        undefined -> '';
+        ModuleAttribute ->
+            [ModuleName|_MaybeParameterizedModuleArgument] =
+                erl_syntax:attribute_arguments(ModuleAttribute),
+            erl_syntax:atom_value(ModuleName)
+    end.
+
+%% @doc Returns the form for the first `-module' attribute in
+%% `Forms', or `undefined' if not found.
+-spec module_form([merlin:ast()]) -> merlin:ast() | undefined.
+module_form(Forms) ->
+    case get_attribute_forms(Forms, module) of
+        [ModuleAttribute|_] ->
+            ModuleAttribute;
+        _ ->
+            undefined
     end.
 
 %%% @doc Callback for formatting error messages from this module
