@@ -151,13 +151,17 @@ transform_internal(Forms0, State0) when is_list(Forms0) ->
 transform_internal(Form, State0) ->
     set_target_mfa(Form, State0),
     State1 = update_file(Form, State0),
-    case erl_syntax:is_leaf(Form) of
-        true ->
+    case form_kind(Form) of
+        leaf ->
             {_Action, Node1, State2} = call_transformer(leaf, Form, State1),
             %% Here, at the leaf node, the action does not matter, as we're not
             %% recursing anymore.
             {Node1, State2};
-        false ->
+        form_list ->
+            Forms0 = erl_syntax:flatten_form_list(Form) ,
+            Forms1 = erl_syntax:form_list_elements(Forms0),
+            transform_internal(Forms1, State0);
+        _ ->
             {Action0, Tree1, State2} = call_transformer(enter, Form, State1),
             case Action0 of
                 continue ->
@@ -175,6 +179,14 @@ transform_internal(Form, State0) ->
                 return ->
                     {Tree1, State2}
             end
+    end.
+
+form_kind(Form) ->
+    case erl_syntax:is_leaf(Form) of
+        true ->
+            leaf;
+        false ->
+            erl_syntax:type(Form)
     end.
 
 update_file(Form, State) ->
@@ -371,9 +383,11 @@ expand_callback_return({continue, Node1, Extra1}, _Node0, _Extra0) ->
 expand_callback_return({Node1, Extra1}, _Node0, _Extra0) when is_tuple(Node1) ->
     {continue, Node1, Extra1, []};
 expand_callback_return(Nodes0, _Node0, Extra0) when is_list(Nodes0) ->
-    Nodes1 = lists:flatten(Nodes0),
-    lists:foreach(fun assert_valid_node/1, Nodes1),
-    {continue, Nodes1, Extra0, []};
+    Nodes1 = erl_syntax:form_list(Nodes0),
+    Nodes2 = erl_syntax:flatten_form_list(Nodes1) ,
+    Nodes3 = erl_syntax:form_list_elements(Nodes2),
+    lists:foreach(fun assert_valid_node/1, Nodes3),
+    {continue, Nodes3, Extra0, []};
 expand_callback_return(Node1, Node0, Extra0) ->
     case assert_valid_node(Node1) of
         form_list ->
@@ -695,12 +709,26 @@ return(Tree) ->
 %%% warnings as appropriate.
 %%%
 %%% This matches the `case' in {@link compile:foldl_transform/3}.
-finalize(Tree, #state{errors=[], warnings=[]}) ->
-    Tree;
-finalize(Tree, #state{errors=[], warnings=Warnings}) ->
-    {warning, Tree, group_by_file(Warnings)};
+finalize(Tree, #state{errors=[], warnings=[]} = State) ->
+    expand_form_lists(Tree, State);
+finalize(Tree0, #state{errors=[], warnings=Warnings} = State0) ->
+    State1 = State0#state{warnings=[]}, % Clear the warnings to force a traversal
+    Tree1 = expand_form_lists(Tree0, State1),
+    {warning, Tree1, group_by_file(Warnings)};
 finalize(_Tree, #state{errors=Errors, warnings=Warnings}) ->
     {error, group_by_file(Errors), group_by_file(Warnings)}.
+
+%% @private
+%% We need to expand any {@link erl_syntax:form_list/1}.
+%% This is already handled in transform_internal, but only on the way down.
+%% We can use the identity transform to traverse it one last time.
+expand_form_lists(Tree0, State0) ->
+    State1 = State0#state{transformer=fun identity_transformer/3},
+    {Tree1, _} = transform_internal(Tree0, State1),
+    Tree1.
+
+%% @private
+identity_transformer(_, _, _) -> continue.
 
 %%% @doc Reverts back from Syntax Tools format to Erlang forms.
 %%%
