@@ -468,7 +468,7 @@ ungroup_exceptions(Type, Groups) ->
         Marker <- Markers
     ].
 
-%% @doc Like `erl_synatx_lib:analyze_forms' but returns maps.
+%% @doc Like `erl_syntax_lib:analyze_forms' but returns maps.
 %% Also all fields are present, except `module' so you can determine if it
 %% exists or not. It also includes a `file' field and makes some fields
 %% easier to use, like records being a map from name to definition.
@@ -706,7 +706,7 @@ finalize(_Tree, #state{errors=Errors, warnings=Warnings}) ->
 %%%
 %%% Accepts a list of forms, or a single form.
 %%%
-%%% Copied from `parse_trans:revert_form/1' and slighly modifed. The original
+%%% Copied from `parse_trans:revert_form/1' and slightly modified. The original
 %%% also handles a bug in R16B03, but that is ancient history now.
 revert(Forms) when is_list(Forms) ->
     lists:map(fun revert/1, Forms);

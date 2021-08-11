@@ -1,3 +1,7 @@
+%%% @doc Helpers for working with {@link erl_syntax:syntaxTree/0}.
+%%% Similar to {@link erl_syntax_lib}, but with a different set of helpers,
+%%% and a preference for returning maps over proplists.
+%%% @end
 -module(merlin_lib).
 
 -include("internal.hrl").
@@ -121,8 +125,8 @@ test_variable_formatter(Prefix0, Suffix0) ->
 
 -type bindings_or_form() :: bindings() | merlin:ast().
 
-%%% @doc Returns the filename for the first `-file' attribute in `Forms', or
-%%% `""' if not found.
+%% @doc Returns the filename for the first `-file' attribute in `Forms', or
+%% `""' if not found.
 -spec file([merlin:ast()]) -> string().
 file(Forms) ->
     case get_attribute(Forms, file, undefined) of
@@ -161,9 +165,9 @@ update_tree(Node, Form) when is_tuple(Form) ->
     ?assertNodeType(Node, ?assertIsForm(Form)),
     erl_syntax:update_tree(Node, erl_syntax:subtrees(Form)).
 
-%%% @doc Callback for formatting error messages from this module
-%%%
-%%% @see erl_parse:format_error/1
+%% @doc Callback for formatting error messages from this module
+%%
+%% @see erl_parse:format_error/1
 format_error(Message0) ->
     Message1 = case io_lib:deep_char_list(Message0) of
         true ->
@@ -207,26 +211,36 @@ keyfind(List, Key, Default) ->
             end
     end.
 
-%%% @doc Returns the annotation for the given form,
-%%% or raises `{badkey, Annotation}' if not found.
+%% @doc Returns the annotation for the given form,
+%% or raises `{badkey, Annotation}' if not found.
 get_annotation(Form, Annotation) ->
     Annotations = get_annotations(Form),
     maps:get(Annotation, Annotations).
 
-%%% @doc Returns the annotation for the given form,
-%%% or Default if not found.
+%% @doc Returns the annotation for the given form,
+%% or Default if not found.
 get_annotation(Form, Annotation, Default) ->
     Annotations = get_annotations(Form),
     maps:get(Annotation, Annotations, Default).
 
-%%% @doc Returns all annotations associated with the given `Form' as a map.
+%% @doc Returns all annotations associated with the given `Form' as a map.
 get_annotations(Form) ->
     {ErlAnno, ErlSyntax} = get_annotations_internal(Form),
     maps:merge(maps:from_list(ErlAnno), ErlSyntax).
 
+%% @doc Returns the given form with the given annotation set to the given
+%% value.
 set_annotation(Form, Annotation, Value) ->
     update_annotation(Form, #{ Annotation => Value }).
 
+%% @doc Returns the given form with the given annotations merged in.
+%% It seperates {@link erl_anno} annotations from user once, which means if
+%% you set `line' or `file', you update the position/location of the form,
+%% else you are setting an erl_syntax user annotation.
+%%
+%% @see erl_anno
+%% @see erl_syntax:get_pos/1
+%% @see erl_syntax:get_ann/1
 update_annotation(Form, NewAnnotations) ->
     {ErlAnno, ErlSyntax} = get_annotations_internal(Form),
     {NewErlAnno, NewErlSyntax} = lists:partition(
