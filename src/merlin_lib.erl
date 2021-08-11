@@ -27,7 +27,7 @@
     get_annotation/3,
     get_annotations/1,
     set_annotation/3,
-    update_annotation/2
+    update_annotations/2
 ]).
 
 -export([
@@ -231,7 +231,7 @@ get_annotations(Form) ->
 %% @doc Returns the given form with the given annotation set to the given
 %% value.
 set_annotation(Form, Annotation, Value) ->
-    update_annotation(Form, #{ Annotation => Value }).
+    update_annotations(Form, #{ Annotation => Value }).
 
 %% @doc Returns the given form with the given annotations merged in.
 %% It seperates {@link erl_anno} annotations from user once, which means if
@@ -241,7 +241,7 @@ set_annotation(Form, Annotation, Value) ->
 %% @see erl_anno
 %% @see erl_syntax:get_pos/1
 %% @see erl_syntax:get_ann/1
-update_annotation(Form, NewAnnotations) ->
+update_annotations(Form, NewAnnotations) ->
     {ErlAnno, ErlSyntax} = get_annotations_internal(Form),
     {NewErlAnno, NewErlSyntax} = lists:partition(
         fun is_erl_anno/1, maps:to_list(NewAnnotations)
@@ -683,7 +683,7 @@ add_bindings(BindingsOrForm, NewBindings0) ->
                         get_annotations(BindingsOrForm), NewBindings2
                     ),
                     if is_map(UpdatedBindings) ->
-                        update_annotation(BindingsOrForm, UpdatedBindings);
+                        update_annotations(BindingsOrForm, UpdatedBindings);
                     ?else ->
                         set_annotation(BindingsOrForm, bound, UpdatedBindings)
                     end
