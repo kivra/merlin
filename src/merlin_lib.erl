@@ -1,7 +1,6 @@
 -module(merlin_lib).
 
--include_lib("stdlib/include/assert.hrl").
--include("log.hrl").
+-include("internal.hrl").
 
 -export([
     file/1,
@@ -55,15 +54,68 @@
     new_variables/4
 ]).
 
+-export_type([
+    bindings/0,
+    bindings_by_type/0,
+    bindings_or_form/0
+]).
+
 -define(else, true).
 
+-ifndef(TEST).
 -define(variable_formatter,
     fun(N) ->
         binary_to_atom(iolist_to_binary(io_lib:format("~s~p~s", [Prefix, N, Suffix])))
     end
 ).
+-else.
+%% During testing we ignore the randomly generated N, and use the process
+%% dictionary to keep track of the next number. This is to allow writing
+%% deterministic tests.
+%%
+%% It use multiple counters, one per prefix/suffix combination. This makes it
+%% much easier to guess what the automatic variable will be.
+-define(variable_formatter,
+    fun(_N) ->
+        test_variable_formatter(Prefix, Suffix)
+    end
+).
+
+test_variable_formatter(Prefix0, Suffix0) ->
+    Prefix1 = iolist_to_binary(io_lib:format("~s", [Prefix0])),
+    Suffix1 = iolist_to_binary(io_lib:format("~s", [Suffix0])),
+    Key = {'merlin_lib:variable_counter', Prefix1, Suffix1},
+    N = case erlang:get(Key) of
+        undefined -> 1;
+        Number -> Number
+    end,
+    put(Key, N + 1),
+    binary_to_atom(iolist_to_binary(io_lib:format("~s~p~s", [Prefix1, N, Suffix1]))).
+-endif.
+
+-define(is_binding_type(Type),
+    (Type =:= bound orelse Type =:= env orelse Type =:= free)
+).
 
 -define(ERL_ANNO_KEYS, [file, generated, location, record, text]).
+
+-type variable() :: atom() | merlin:ast().
+
+-type set() :: set(variable()).
+-type set(T) :: sets:set(T) | ordsets:ordset(T).
+
+-type bindings() ::
+    bindings_by_type()
+    | #{bindings := bindings_by_type()}
+    | set(variable()).
+
+-type bindings_by_type() :: #{
+    env := ordsets:set(variable()),
+    bound := ordsets:set(variable()),
+    free :=  ordsets:set(variable())
+}.
+
+-type bindings_or_form() :: bindings() | merlin:ast().
 
 %%% @doc Returns the filename for the first `-file' attribute in `Forms', or
 %%% `""' if not found.
@@ -294,52 +346,143 @@ value(Node) ->
         false -> error({badvalue, Node})
     end.
 
-add_new_variable(Bindings) ->
-    Var = new_variable(Bindings),
-    {Var, add_binding(Bindings, Var)}.
+%% @doc Same as {@link add_new_variable/3} with default prefix and suffix.
+%%
+%% @see new_variable/3
+add_new_variable(BindingsOrForm) ->
+    Var = new_variable(BindingsOrForm),
+    {Var, add_binding(BindingsOrForm, Var)}.
 
-add_new_variable(Bindings, Prefix) ->
-    Var = new_variable(Bindings, Prefix),
-    {Var, add_binding(Bindings, Var)}.
+%% @doc Same as {@link add_new_variable/3} with the given prefix and default
+%% suffix.
+%%
+%% @see new_variable/3
+add_new_variable(BindingsOrForm, Prefix) ->
+    Var = new_variable(BindingsOrForm, Prefix),
+    {Var, add_binding(BindingsOrForm, Var)}.
 
-add_new_variable(Bindings, Prefix, Suffix) ->
-    Var = new_variable(Bindings, Prefix, Suffix),
-    {Var, add_binding(Bindings, Var)}.
+%% @doc Creates a new variable using {@link new_variable/3} and adds it to the
+%% given form or bindings.
+%%
+%% @see new_variable/3
+add_new_variable(BindingsOrForm, Prefix, Suffix) ->
+    Var = new_variable(BindingsOrForm, Prefix, Suffix),
+    {Var, add_binding(BindingsOrForm, Var)}.
 
-add_new_variables(Bindings, Total) ->
-    Vars = new_variables(Bindings, Total),
-    {Vars, add_bindings(Bindings, Vars)}.
+%% @doc Same as {@link new_variables/3} with default prefix and suffix.
+%%
+%% @see new_variable/3
+add_new_variables(BindingsOrForm, Total) ->
+    Vars0 = new_variables(BindingsOrForm, Total),
+    Vars1 = maybe_form(BindingsOrForm, Vars0),
+    {Vars1, add_bindings(BindingsOrForm, Vars0)}.
 
-add_new_variables(Bindings, Total, Prefix) ->
-    Vars = new_variables(Bindings, Total, Prefix),
-    {Vars, add_bindings(Bindings, Vars)}.
+%% @doc Same as {@link new_variable/3} with the given prefix and default
+%% suffix.
+%%
+%% @see new_variable/3
+add_new_variables(BindingsOrForm, Total, Prefix) ->
+    Vars0 = new_variables(BindingsOrForm, Total, Prefix),
+    Vars1 = maybe_form(BindingsOrForm, Vars0),
+    {Vars1, add_bindings(BindingsOrForm, Vars0)}.
 
-add_new_variables(Bindings, Total, Prefix, Suffix) ->
-    Vars = new_variables(Bindings, Total, Prefix, Suffix),
-    {Vars, add_bindings(Bindings, Vars)}.
+%% @doc Creates `Total' number of new variables using {@link new_variables/4}
+%% and adds it to the given form or bindings.
+%%
+%% @see new_variable/3
+add_new_variables(BindingsOrForm, Total, Prefix, Suffix) ->
+    Vars0 = new_variables(BindingsOrForm, Total, Prefix, Suffix),
+    Vars1 = maybe_form(BindingsOrForm, Vars0),
+    {Vars1, add_bindings(BindingsOrForm, Vars0)}.
 
-new_variable(Bindings) ->
-    new_variable(get_bindings(Bindings), "__Var", "__").
+%% @doc Same as {@link new_variable/3} with default prefix and suffix.
+new_variable(BindingsOrForm) ->
+    new_variable(BindingsOrForm, "__Var", "__").
 
-new_variable(Bindings, Prefix) ->
-    new_variable(Bindings, Prefix, "").
+%% @doc Same as {@link new_variable/3} with the given prefix and default
+%% suffix.
+new_variable(BindingsOrForm, Prefix) ->
+    new_variable(BindingsOrForm, Prefix, "").
 
-new_variable(Bindings, Prefix, Suffix) ->
-    Set = get_bindings(Bindings),
-    erl_syntax_lib:new_variable_name(?variable_formatter, Set).
+%% @doc Returns a new variable guaranteed not to be in the given bindings, or
+%% the bindings associated with the given form.
+%%
+%% If given a set of existing bindings, it will return an atom, if given a
+%% form it will return a new {@link erl_syntax:variable/1. variable}. That
+%% variable will have the {@link erl_anno:generated/1. generated} flag set.
+%%
+%% The resulting variable will be on the format `Prefix<N>Suffix', where `N'
+%% is some small number. Prefix defaults to `__Var', and suffix to `__'.
+%%
+%% If `TEST' is set during compilation, the numbers will be deterministically
+%% increment from 1, otherwise they are random.
+%%
+%% @see erl_syntax_lib:new_variable_name/1
+new_variable(BindingsOrForm, Prefix, Suffix) ->
+    Set = get_bindings(BindingsOrForm),
+    Name = erl_syntax_lib:new_variable_name(?variable_formatter, Set),
+    case
+        is_list(BindingsOrForm) orelse
+        is_map(BindingsOrForm) orelse
+        sets:is_set(BindingsOrForm)
+    of
+        true ->
+            Name;
+        false ->
+            ?assertIsForm(BindingsOrForm),
+            var(BindingsOrForm, Name)
+    end.
 
+%% @doc Same as {@link new_variables/4} with default prefix and suffix.
 new_variables(Total) when is_integer(Total) ->
     new_variables(sets:new(), Total).
 
-new_variables(Bindings, Total) ->
-    new_variables(get_bindings(Bindings), Total, "__Var", "__").
+%% @doc Same as {@link new_variables/4} with the given prefix and default
+%% suffix.
+new_variables(BindingsOrForm, Total) ->
+    new_variables(BindingsOrForm, Total, "__Var", "__").
 
-new_variables(Bindings, Total, Prefix) ->
-    new_variables(Bindings, Total, Prefix, "").
+%% @doc Same as {@link new_variables/4} with the given prefix and suffix.
+new_variables(BindingsOrForm, Total, Prefix) ->
+    new_variables(BindingsOrForm, Total, Prefix, "").
 
-new_variables(Bindings, Total, Prefix, Suffix) ->
-    Set = get_bindings(Bindings),
-    erl_syntax_lib:new_variable_names(Total, ?variable_formatter, Set).
+%% @doc Returns `Total' number of new variables like {@link new_variable/3}.
+%%
+%% @see erl_syntax_lib:new_variable_names/3
+new_variables(BindingsOrForm, Total, Prefix, Suffix) ->
+    Set = get_bindings(BindingsOrForm),
+    Vars = erl_syntax_lib:new_variable_names(
+        Total, ?variable_formatter, Set
+    ),
+    maybe_form(BindingsOrForm, Vars).
+
+%% @private
+maybe_form(Bindings, Variables) when is_list(Bindings) ->
+    ordsets:from_list(Variables);
+maybe_form(BindingsOrForm, Variables) ->
+    case sets:is_set(BindingsOrForm) of
+        true ->
+            Variables;
+        false ->
+            ?assertIsForm(BindingsOrForm),
+            [var(BindingsOrForm, Name) || Name <- Variables]
+    end.
+
+%% @private
+var(Form, Name) when is_atom(Name) ->
+    set_annotation(
+        erl_syntax:copy_attrs(Form, erl_syntax:variable(Name)),
+        generated,
+        true
+    );
+var(Form, Var) ->
+    erl_syntax:copy_attrs(Form, Var).
+
+%% @private
+var_name(Name) when is_atom(Name) ->
+    Name;
+var_name(Form) ->
+    erl_syntax:variable_name(Form).
 
 %%% @doc Get all bindings associated with the given `Value'.
 get_bindings(#{ bindings := Bindings }) ->
@@ -354,31 +497,98 @@ get_bindings(BindingsOrForm) ->
             get_bindings(get_annotations(BindingsOrForm))
     end.
 
+%% @doc Adds the given binding to the existing ones.
+%% See {@link add_bindings/2}.
+-spec add_binding
+    (#{bindings := bindings_by_type()}, atom()) -> #{bindings := bindings_by_type()};
+    (bindings_by_type(), atom()) -> bindings_by_type();
+    (sets:set(Variable), atom()) -> sets:set(Variable) when
+        Variable :: variable();
+    (ordsets:set(Variable), atom()) -> ordsets:ordset(Variable) when
+        Variable :: variable();
+    (merlin:ast(), atom()) -> merlin:ast().
 add_binding(Bindings, NewBinding) ->
     add_bindings(Bindings, [NewBinding]).
 
-add_bindings(#{ bindings := Bindings } = Input, NewBindings) ->
+%% @doc Adds the given bindings to the existing ones.
+%% Accepts the same input as {@link get_bindings}.
+%%
+%% When given a form, it updates the bindings on that form, see
+%% {@link merlin:annotate/2} for more info.
+%% When given a map of bindings as returned by {@link get_bindings_with_type},
+%% it updates the `free' and `bound' fields as appropriate.
+-spec add_bindings
+    (#{bindings := bindings_by_type()}, set()) -> #{bindings := bindings_by_type()};
+    (bindings_by_type(), set()) -> bindings_by_type();
+    (sets:set(Variable), set()) -> sets:set(Variable) when
+        Variable :: variable();
+    (ordsets:set(Variable), set()) -> ordsets:ordset(Variable) when
+        Variable :: variable();
+    (merlin:ast(), set()) -> merlin:ast().
+add_bindings(#{bindings := Bindings} = Input, NewBindings) ->
     Input#{ bindings => add_bindings(Bindings, NewBindings) };
-add_bindings(#{ env := Env, bound := Bound, free := Free } = Input, NewBindings) ->
-    AllBindings = ordsets:union([Env, Bound, Free]),
-    case ordsets:is_subset(NewBindings, AllBindings) of
-        true -> Input;
-        false ->
-            New = ordsets:subtract(NewBindings, AllBindings),
-            Input#{ bound => ordsets:union(Bound, New) }
-    end;
-add_bindings(BindingsOrForm, NewBindings) ->
+add_bindings(#{ env := _Env, bound := Bound0, free := Free0 } = Input, New0) ->
+    New1 = into_ordset(New0),
+    New2 = lists:map(fun var_name/1, New1),
+    Free1 = ordsets:subtract(Free0, New2),
+    Bound1 = ordsets:union(Bound0, New2),
+    Input#{
+        free := Free1,
+        bound := Bound1
+    };
+add_bindings(BindingsOrForm, NewBindings0) ->
+    NewBindings1 = into_ordset(NewBindings0),
+    NewBindings2 = lists:map(fun var_name/1, NewBindings1),
     case sets:is_set(BindingsOrForm) of
         true ->
-            Set = if is_list(NewBindings) ->
-                sets:from_list(NewBindings);
-            ?else ->
-                NewBindings
-            end,
+            Set = sets:from_list(NewBindings2),
             sets:union(BindingsOrForm, Set);
         false ->
-            update_annotation(
-                BindingsOrForm,
-                add_bindings(get_annotations(BindingsOrForm), NewBindings)
-            )
+            case ordsets:is_set(BindingsOrForm) of
+                true ->
+                    ordsets:union(BindingsOrForm, NewBindings2);
+                false ->
+                    UpdatedBindings = add_bindings(
+                        get_annotations(BindingsOrForm), NewBindings2
+                    ),
+                    if is_map(UpdatedBindings) ->
+                        update_annotation(BindingsOrForm, UpdatedBindings);
+                    ?else ->
+                        set_annotation(BindingsOrForm, bound, UpdatedBindings)
+                    end
+            end
+    end.
+
+%% @private
+-spec into_ordset(set(T)) -> ordsets:set(T).
+into_ordset(List) when is_list(List) ->
+    %% May be unsorted and/or not unique
+    ordsets:from_list(List);
+into_ordset(Set) ->
+    case sets:is_set(Set) of
+        true ->
+            ordsets:from_list(sets:to_list(Set));
+        false ->
+            case ordsets:is_set(Set) of
+                true ->
+                    Set;
+                false ->
+                    error(badarg)
+            end
+    end.
+
+%% @private
+%% @doc Works like {@link set:is_element/2} and {@link ordset:is_element/2},
+%% handling both types of sets.
+is_element(Set, Key) ->
+    case sets:is_set(Set) of
+        true ->
+            sets:is_element(Key, Set);
+        false ->
+            case ordsets:is_set(Set) of
+                true ->
+                    ordsets:is_element(Key, Set);
+                false ->
+                    error(badarg)
+            end
     end.
