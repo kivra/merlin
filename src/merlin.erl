@@ -53,8 +53,8 @@
     [{File :: string(), [exception_marker()]}].
 
 -type parse_transform_return() ::
-    ast()
-    | {warning, ast(), exceptions_grouped_by_file()}
+    [ast()]
+    | {warning, [ast()], exceptions_grouped_by_file()}
     | {error, exceptions_grouped_by_file(), exceptions_grouped_by_file()}.
 
 -type phase() :: enter | leaf | exit.
@@ -109,7 +109,7 @@
 %% 3, When you `exit' a subtree
 %%
 %% It's recommended to have a match-all clause to future proof your code.
--spec transform(ast(), transformer(Extra), Extra) -> {parse_transform_return(), Extra}.
+-spec transform([ast()], transformer(Extra), Extra) -> {parse_transform_return(), Extra}.
 transform(Forms, Transformer, Extra) when is_function(Transformer, 3) ->
     InternalState = #state{
         file = merlin_lib:file(Forms),
@@ -150,7 +150,8 @@ transform(Forms, Transformer, Extra) when is_function(Transformer, 3) ->
     {FinalTree, FinalState#state.extra}.
 
 %% @private
--spec transform_internal(ast(), #state{}) -> {ast(), #state{}}.
+-spec transform_internal(FormOrForms, #state{}) -> {ast(), #state{}} when
+    FormOrForms :: ast() | [FormOrForms].
 transform_internal(Forms0, State0) when is_list(Forms0) ->
     {Forms1, State1} = lists:mapfoldl(fun transform_internal/2, State0, Forms0),
     {lists:flatten(Forms1), State1};
@@ -244,7 +245,7 @@ get_file_attribute(Form) ->
             false
     end.
 
--spec mapfold_subtrees(Fun, #state{}, ast() | [ast()]) -> {#state{}, [ast()]} when
+-spec mapfold_subtrees(Fun, #state{}, ast()) -> {ast(), #state{}} when
     Fun :: fun((ast(), #state{}) -> {ast(), #state{}}).
 mapfold_subtrees(Fun, State0, Tree0) ->
     case erl_syntax:subtrees(Tree0) of
@@ -328,7 +329,7 @@ call_transformer(
 %%
 %% This makes the {@link call_transformer/3} much simpler to write.
 -spec expand_callback_return(Return, ast(), Extra) ->
-    {action(), ast(), Extra, Reasons}
+    {action(), AST, Extra, Reasons}
 when
     Return ::
         Action

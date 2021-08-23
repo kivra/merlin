@@ -308,7 +308,7 @@ set_erl_anno({text, Text}, Anno) ->
 
 %% @doc Returns the argument to the first module attribute with the given
 %% name, or Default if not found.
--spec get_attribute(merlin:ast(), atom(), term()) -> term().
+-spec get_attribute(merlin:ast() | [merlin:ast()], atom(), term()) -> term().
 get_attribute(Tree, Name, Default) when is_tuple(Tree) ->
     get_attribute(lists:flatten(erl_syntax:subtrees(Tree)), Name, Default);
 get_attribute(Tree, Name, Default) ->
@@ -486,6 +486,7 @@ maybe_form(BindingsOrForm, Variables) ->
     end.
 
 %% @private
+-spec var(merlin:ast(), variable()) -> merlin:ast().
 var(Form, Name) when is_atom(Name) ->
     set_annotation(
         erl_syntax:copy_attrs(Form, erl_syntax:variable(Name)),
@@ -511,6 +512,7 @@ var_name(Form) ->
 %% It tries to find the `env' variables from the given form, or first form if
 %% given a list of forms. If none can be found it assumes there's no `env'
 %% variables.
+-spec annotate_bindings(merlin:ast() | [merlin:ast()]) -> merlin:ast().
 annotate_bindings(Forms0) when is_list(Forms0) ->
     Forms1 = lists:flatten(Forms0),
     Env =
