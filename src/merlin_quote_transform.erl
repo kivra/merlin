@@ -127,18 +127,28 @@
 
 -define(ppc(Clauses), begin
     erlang:apply(
-        io, format, tuple_to_list(merlin_internal:format_forms(
-            {"Case with " ??Clauses " = ", erl_syntax:case_expr({var, ?LINE, '_'}, Clauses)}
-        ))
+        io,
+        format,
+        tuple_to_list(
+            merlin_internal:format_forms(
+                {"Case with " ??Clauses " = ",
+                    erl_syntax:case_expr({var, ?LINE, '_'}, Clauses)}
+            )
+        )
     ),
     io:nl()
 end).
 
 -define(ppc(Argument, Clauses), begin
     erlang:apply(
-        io, format, tuple_to_list(merlin_internal:format_forms(
-            {"Case with " ??Argument " of " ??Clauses " = ", erl_syntax:case_expr(Argument, Clauses)}
-        ))
+        io,
+        format,
+        tuple_to_list(
+            merlin_internal:format_forms(
+                {"Case with " ??Argument " of " ??Clauses " = ",
+                    erl_syntax:case_expr(Argument, Clauses)}
+            )
+        )
     ),
     io:nl()
 end).
@@ -155,7 +165,7 @@ parse_transform(Forms, Options) ->
     Clauses :: [fun((Arguments) -> {ok, Value} | continue)].
 switch(Arguments, []) when is_list(Arguments) ->
     nomatch;
-switch(Arguments, [Clause|Clauses]) when
+switch(Arguments, [Clause | Clauses]) when
     is_list(Arguments) andalso is_function(Clause, length(Arguments))
 ->
     case apply(Clause, Arguments) of
@@ -174,7 +184,9 @@ transform(Forms, Options) ->
     % erlang:system_flag(backtrace_depth, 20),
     AnnotatedForms = merlin:annotate(Forms, [file, bindings]),
     {FinalForms, _FinalState} = merlin:transform(
-        AnnotatedForms, fun quote/3, #{
+        AnnotatedForms,
+        fun quote/3,
+        #{
             options => Options,
             module => merlin_lib:module(Forms)
         }
@@ -196,16 +208,20 @@ quote(enter, Form, #{module := Module}) ->
                 [Module, merlin_lib:value(Name), Arity]
             ),
             Variables = merlin_lib:new_variables(Form, Arity, "__Arg"),
-            CaseArgument0 = case Arity of
-                1 -> hd(Variables);
-                _ -> erl_syntax:list(Variables)
-            end,
+            CaseArgument0 =
+                case Arity of
+                    1 -> hd(Variables);
+                    _ -> erl_syntax:list(Variables)
+                end,
             CaseArgument1 = merlin_lib:add_bindings(CaseArgument0, Variables),
             CaseArgument2 = merlin_lib:set_annotation(
-                CaseArgument1, function_arguments, Variables
+                CaseArgument1,
+                function_arguments,
+                Variables
             ),
             Clauses1 = lists:map(
-                fun function_clause_to_case_clause/1, Clauses0
+                fun function_clause_to_case_clause/1,
+                Clauses0
             ),
             ?Q([
                 "'@Name'(_@Variables) ->",
@@ -219,23 +235,24 @@ quote(enter, Form, #{module := Module}) ->
             "   _@_ ->",
             "       _@_@Clauses0",
             "end"
-        ]) when
-            has_complex_merl_patterns(Clauses0)
-        ->
+        ]) when has_complex_merl_patterns(Clauses0) ->
             Arguments = erl_syntax:list(
                 merlin_lib:get_annotation(
-                    CaseArgument0, function_arguments, [CaseArgument0]
+                    CaseArgument0,
+                    function_arguments,
+                    [CaseArgument0]
                 )
             ),
             {ValueVar, CaseArgument1} = merlin_lib:add_new_variable(
-                CaseArgument0, "__ValueVar"
+                CaseArgument0,
+                "__ValueVar"
             ),
             RaiseFunctionOrCaseClause = raise_function_or_case_clause(
                 CaseArgument1
             ),
             Clauses1 = clauses_to_fun(Clauses0),
             ?Q([
-                "case "?MODULE_STRING":switch(_@Arguments, _@Clauses1) of",
+                "case " ?MODULE_STRING ":switch(_@Arguments, _@Clauses1) of",
                 "    {ok, _@ValueVar} ->",
                 "        _@ValueVar;",
                 "    _ ->",
@@ -245,9 +262,11 @@ quote(enter, Form, #{module := Module}) ->
         ?Q("{'MERLIN QUOTE MARKER', _@FileNode, _@LineNode, _@BodySource}") ->
             %% -define(Q(Text), merl:quote(?LINE, Text)).
             ?Q("merl:quote(_@LineNode, _@BodySource)");
-        _ -> continue
+        _ ->
+            continue
     end;
-quote(_, _, _) -> continue.
+quote(_, _, _) ->
+    continue.
 
 %% @doc Is the given `Form' the match all pattern, aka underscore?
 is_underscore(Form) ->
@@ -264,13 +283,13 @@ is_variable(Form) ->
 will_always_match(Clause) ->
     ?assertNodeType(Clause, clause),
     erl_syntax:clause_guard(Clause) =:= none andalso
-    lists:all(
-        fun(Pattern) ->
-            Type = erl_syntax:type(Pattern),
-            Type =:= underscore orelse Type =:= variable
-        end,
-        erl_syntax:clause_patterns(Clause)
-    ).
+        lists:all(
+            fun(Pattern) ->
+                Type = erl_syntax:type(Pattern),
+                Type =:= underscore orelse Type =:= variable
+            end,
+            erl_syntax:clause_patterns(Clause)
+        ).
 
 %% @doc Does the given `Pattern' refer to an unbound variable?
 %% The bindings are taken from the second argument.
@@ -325,7 +344,8 @@ has_any_clause_with_quote_pattern(Clauses) when is_list(Clauses) ->
         fun(Clause) ->
             ?assertNodeType(Clause, clause),
             lists:any(
-                fun has_quote_pattern/1, erl_syntax:clause_patterns(Clause)
+                fun has_quote_pattern/1,
+                erl_syntax:clause_patterns(Clause)
             )
         end,
         Clauses
@@ -353,7 +373,7 @@ is_merl_switchable([Clause]) ->
         _ ->
             false
     end;
-is_merl_switchable([Clause|Clauses]) ->
+is_merl_switchable([Clause | Clauses]) ->
     case erl_syntax:clause_patterns(Clause) of
         [Pattern] ->
             case is_merl_quote(Pattern) of
@@ -393,28 +413,33 @@ clause_to_fun(Clause0) ->
     Body0 = erl_syntax:clause_body(Clause0),
     Body1 = ok_tuple(Body0),
     Clause1 = update_clause(Clause0, copy, copy, Body1),
-    Clause2 = case
-        merlin_lib:get_annotation(Clause1, function_clause, false)
-    of
-        true ->
-            %% Pattern is the list of patterns from the original function head
-            update_clause(Clause1, erl_syntax:list_elements(CasePattern));
-        false ->
-            Clause1
-    end,
+    Clause2 =
+        case merlin_lib:get_annotation(Clause1, function_clause, false) of
+            true ->
+                %% Pattern is the list of patterns from the original function head
+                update_clause(Clause1, erl_syntax:list_elements(CasePattern));
+            false ->
+                Clause1
+        end,
     Patterns = erl_syntax:clause_patterns(Clause2),
-    Clause4 = case has_quote_pattern(Patterns) of
-        true ->
-            {
-                Clause3, PatternsWithoutMerl, Replacements
-            } = replace_merl_with_temporary_variables(Clause2, Patterns),
-            MerlPatternsCase = fold_merl_patterns(Replacements, Guard, Body1),
-            update_clause(
-                Clause3, PatternsWithoutMerl, none, MerlPatternsCase
-            );
-        false ->
-            Clause2
-    end,
+    Clause4 =
+        case has_quote_pattern(Patterns) of
+            true ->
+                {
+                    Clause3,
+                    PatternsWithoutMerl,
+                    Replacements
+                } = replace_merl_with_temporary_variables(Clause2, Patterns),
+                MerlPatternsCase = fold_merl_patterns(Replacements, Guard, Body1),
+                update_clause(
+                    Clause3,
+                    PatternsWithoutMerl,
+                    none,
+                    MerlPatternsCase
+                );
+            false ->
+                Clause2
+        end,
     Guard1 = erl_syntax:clause_guard(Clause4),
     case is_guard_test(Guard1) of
         true ->
@@ -435,7 +460,7 @@ clause_to_fun(Clause0) ->
                 'orelse',
                 [
                     join('andalso', Conjunctions)
-                    || Conjunctions <- guard_to_nested_lists(Guard1)
+                 || Conjunctions <- guard_to_nested_lists(Guard1)
                 ]
             ),
             GuardedCase = ?Q([
@@ -470,12 +495,20 @@ clause_to_fun(Clause0) ->
 %% `_' patterns entirely.
 fold_merl_patterns([{MerlPattern, TemporaryVariable}], Guard, Body) ->
     case_or_match(
-        TemporaryVariable, MerlPattern, Guard, Body, ?Q("continue")
+        TemporaryVariable,
+        MerlPattern,
+        Guard,
+        Body,
+        ?Q("continue")
     );
-fold_merl_patterns([{MerlPattern, TemporaryVariable}|Replacements], Guard, Body0) ->
+fold_merl_patterns([{MerlPattern, TemporaryVariable} | Replacements], Guard, Body0) ->
     NestedMerlPatternCases = fold_merl_patterns(Replacements, Guard, Body0),
     case_or_match(
-        TemporaryVariable, MerlPattern, Guard, NestedMerlPatternCases, ?Q("continue")
+        TemporaryVariable,
+        MerlPattern,
+        Guard,
+        NestedMerlPatternCases,
+        ?Q("continue")
     ).
 
 %% @doc Returns the given form, or forms, wrapped in a `{ok, Form}' tuple.
@@ -506,13 +539,21 @@ case_or_match(Argument, Pattern, none, MatchBody, NoMatchBody) ->
                     ]);
                 false ->
                     case_maybe_with_no_match_clause(
-                        Argument, Pattern, none, MatchBody, NoMatchBody
+                        Argument,
+                        Pattern,
+                        none,
+                        MatchBody,
+                        NoMatchBody
                     )
             end
     end;
 case_or_match(Argument, Pattern, Guard, MatchBody, NoMatchBody) ->
     case_maybe_with_no_match_clause(
-        Argument, Pattern, Guard, MatchBody, NoMatchBody
+        Argument,
+        Pattern,
+        Guard,
+        MatchBody,
+        NoMatchBody
     ).
 
 %% @private
@@ -539,21 +580,23 @@ case_maybe_with_no_match_clause(Argument, Pattern, Guard, MatchBody0, NoMatchBod
 %% @doc Normalizes the given `Guard' to a list of lists, representing a list
 %% of disjunctions, each a list of conjunctions.
 guard_to_nested_lists(Guard) ->
-    Disjunction = case erl_syntax:type(Guard) of
-        disjunction -> erl_syntax:disjunction_body(Guard);
-        conjunction -> [Guard]
-    end,
+    Disjunction =
+        case erl_syntax:type(Guard) of
+            disjunction -> erl_syntax:disjunction_body(Guard);
+            conjunction -> [Guard]
+        end,
     lists:map(fun erl_syntax:conjunction_body/1, Disjunction).
 
 %% @doc Joins the given `Expressions' using the given `Operator'.
 join(_, [Expression]) ->
     Expression;
-join(OperatorName, [First|Expressions]) ->
+join(OperatorName, [First | Expressions]) ->
     Operator = erl_syntax:operator(OperatorName),
     lists:foldl(
         fun(Left, Right) ->
             erl_syntax:copy_attrs(
-                Left, erl_syntax:infix_expr(Left, Operator, Right)
+                Left,
+                erl_syntax:infix_expr(Left, Operator, Right)
             )
         end,
         First,
@@ -566,8 +609,8 @@ join(OperatorName, [First|Expressions]) ->
 %% It takes the current set of bindings from the first argument, and updates
 %% it with the temporary variables created during transformation.
 -dialyzer({nowarn_function, replace_merl_with_temporary_variables/2}).
--spec replace_merl_with_temporary_variables
-    (Parent, FormsToReplace) -> {Parent, FormsToReplace, Replacements}
+-spec replace_merl_with_temporary_variables(Parent, FormsToReplace) ->
+    {Parent, FormsToReplace, Replacements}
 when
     Parent :: merlin:ast(),
     FormsToReplace :: merlin:ast(),
@@ -583,14 +626,18 @@ replace_merl_with_temporary_variables(Parent0, FormsToReplace) ->
         bindings := NewBindings,
         replacements := Replacements
     }} = merlin:transform(
-        FormsToReplace, fun replacement_transformer/3, State
+        FormsToReplace,
+        fun replacement_transformer/3,
+        State
     ),
     Parent1 = merlin_lib:add_bindings(Parent0, NewBindings),
     {Parent1, Result, Replacements}.
 
 %% @private
 replacement_transformer(
-    enter, Form, #{bindings := Bindings0, replacements := Replacements} = State0
+    enter,
+    Form,
+    #{bindings := Bindings0, replacements := Replacements} = State0
 ) ->
     case Form of
         ?Q("_@MerlPattern = _@Var") when
@@ -598,7 +645,7 @@ replacement_transformer(
         ->
             %% There's already a variable for it, lets reuse it
             State1 = State0#{
-                replacements := [{MerlPattern, Var}|Replacements]
+                replacements := [{MerlPattern, Var} | Replacements]
             },
             {return, Var, State1};
         ?Q("_@MerlPattern") when is_merl_quote(MerlPattern) ->
@@ -607,20 +654,24 @@ replacement_transformer(
             ),
             TemporaryVariable0 = erl_syntax:variable(TemporaryVariableName),
             TemporaryVariable1 = erl_syntax:copy_attrs(
-                MerlPattern, TemporaryVariable0
+                MerlPattern,
+                TemporaryVariable0
             ),
             TemporaryVariable2 = merlin_lib:set_annotation(
-                TemporaryVariable1, generated, true
+                TemporaryVariable1,
+                generated,
+                true
             ),
             State1 = State0#{
                 bindings := Bindings1,
-                replacements := [{MerlPattern, TemporaryVariable2}|Replacements]
+                replacements := [{MerlPattern, TemporaryVariable2} | Replacements]
             },
             {return, TemporaryVariable2, State1};
         _ ->
             continue
     end;
-replacement_transformer(_, _, _) -> continue.
+replacement_transformer(_, _, _) ->
+    continue.
 
 %% @doc Returns a form, or forms, that {@link erlang:raise/3. raises} either
 %% `function_clause' or `case_clause' as appropriately.
@@ -630,9 +681,13 @@ replacement_transformer(_, _, _) -> continue.
 %% For function clause, it injects the function arguments into the first stack
 %% frame, and for case clause it errors with the case argument.
 raise_function_or_case_clause(CaseArgument0) ->
-    case merlin_lib:get_annotation(
-        CaseArgument0, function_arguments, undefined
-    ) of
+    case
+        merlin_lib:get_annotation(
+            CaseArgument0,
+            function_arguments,
+            undefined
+        )
+    of
         undefined ->
             RaiseCaseClauseBody = ?Q([
                 "erlang:error({case_clause, _@CaseArgument0})"
@@ -640,7 +695,9 @@ raise_function_or_case_clause(CaseArgument0) ->
             RaiseCaseClauseBody;
         FunctionArguments ->
             [
-                CurrentFrame0, CurrentFrame1, Frames
+                CurrentFrame0,
+                CurrentFrame1,
+                Frames
             ] = merlin_lib:new_variables(CaseArgument0, 3),
             RaiseFunctionClauseBody = ?Q([
                 "{current_stacktrace, [_@CurrentFrame0|_@Frames]} =",
@@ -677,18 +734,21 @@ update_clause(Clause, underscore, _, Body) ->
     Patterns1 = lists:duplicate(length(Patterns0), underscore(Clause)),
     update_clause(Clause, Patterns1, none, Body);
 update_clause(Clause, Patterns0, Guard0, Body0) ->
-    Patterns1 = case Patterns0 of
-        copy -> erl_syntax:clause_patterns(Clause);
-        _ -> maybe_wrap_in_list(Patterns0)
-    end,
-    Guard1 = case Guard0 of
-        copy -> erl_syntax:clause_guard(Clause);
-        _ -> Guard0
-    end,
-    Body1 = case Body0 of
-        copy -> erl_syntax:clause_body(Clause);
-        _ -> maybe_wrap_in_list(Body0)
-    end,
+    Patterns1 =
+        case Patterns0 of
+            copy -> erl_syntax:clause_patterns(Clause);
+            _ -> maybe_wrap_in_list(Patterns0)
+        end,
+    Guard1 =
+        case Guard0 of
+            copy -> erl_syntax:clause_guard(Clause);
+            _ -> Guard0
+        end,
+    Body1 =
+        case Body0 of
+            copy -> erl_syntax:clause_body(Clause);
+            _ -> maybe_wrap_in_list(Body0)
+        end,
     erl_syntax:copy_attrs(
         Clause,
         erl_syntax:clause(Patterns1, Guard1, Body1)
@@ -738,25 +798,28 @@ has_quote_pattern_test_() ->
             Clauses = erl_syntax:function_clauses(Fun),
             ?assertEqual(Expected, has_quote_pattern(Clauses))
         end
-        ||
-            {Expected, Fun} <- [
-                {true, ?Q([
+     || {Expected, Fun} <- [
+            {true,
+                ?Q([
                     "func(" ?EXAMPLE_QUOTE_MARKER ") ->",
                     "   ok."
                 ])},
-                {true, ?Q([
+            {true,
+                ?Q([
                     "func(" ?EXAMPLE_QUOTE_MARKER ", other_argument) ->",
                     "   ok."
                 ])},
-                {true, ?Q([
+            {true,
+                ?Q([
                     "func(#state{form=" ?EXAMPLE_QUOTE_MARKER "}) ->",
                     "   ok."
                 ])},
-                {false, ?Q([
+            {false,
+                ?Q([
                     "func(#state{form=Form}) ->",
                     "   ok."
                 ])}
-            ]
+        ]
     ].
 
 %% Helper macro for defining a module, to be used with the ?QUOTE macros
@@ -979,6 +1042,5 @@ transform_simple_test_() ->
             )
         ]
     }.
-
 
 -endif.

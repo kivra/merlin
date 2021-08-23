@@ -6,10 +6,10 @@
 
 simple() ->
     Map@ = #{},
-    Map@ = Map_#{ first => 1 },
-    Map@ = Map_#{ second => 2 },
-    Map@ = Map_#{ third => 3 },
-    Map@ = Map_#{ first => "abc" },
+    Map@ = Map_#{first => 1},
+    Map@ = Map_#{second => 2},
+    Map@ = Map_#{third => 3},
+    Map@ = Map_#{first => "abc"},
     Map_.
 
 match() ->
@@ -21,29 +21,29 @@ match() ->
         %% This however would not compile, as it's ambiguous if it
         %% should be incremented or refer to the current number.
         %% #{ author := Author } ->
-        #{ author := Author_ } ->
+        #{author := Author_} ->
             maps:get(posts, Author_);
         _ ->
             []
     end.
 
-complex(Ctx@, #{ first_name := FirstName, last_name := LastName } = User@)
-    when not is_map_key(id, User_)
+complex(Ctx@, #{first_name := FirstName, last_name := LastName} = User@) when
+    not is_map_key(id, User_)
 ->
     Id@ = db:generate_id(),
-    User@ = User_#{ id => Id_, name => io_lib:format("~s ~s", [FirstName, LastName]) },
+    User@ = User_#{id => Id_, name => io_lib:format("~s ~s", [FirstName, LastName])},
     case db:save(Ctx_, User_) of
         {ok, {Ctx@, User@}} ->
             {Ctx_, User_};
         {error, {unique_violation, Id_}} ->
             Id@ = db:generete_id(),
             %% Try one extra time
-            complex(Ctx_, User_#{ id := Id_ });
+            complex(Ctx_, User_#{id := Id_});
         {error, _} = Error ->
             Error
     end;
-complex(Ctx@, #{ first_name := FirstName, last_name := LastName } = User@) ->
-    User@ = User_#{ name => io_lib:format("~s ~s", [FirstName, LastName]) },
+complex(Ctx@, #{first_name := FirstName, last_name := LastName} = User@) ->
+    User@ = User_#{name => io_lib:format("~s ~s", [FirstName, LastName])},
     case db:save(Ctx_, User_) of
         {ok, {Ctx@, User@}} ->
             {Ctx_, User_};

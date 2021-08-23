@@ -26,7 +26,9 @@
 -define(QUOTE(Form), ?Q(??Form ".")).
 -define(QUOTE(Form1, Form2), ?Q(??Form1 "," ??Form2 ".")).
 -define(QUOTE(Form1, Form2, Form3), ?Q(??Form1 "," ??Form2 "," ??Form3 ".")).
--define(QUOTE(Form1, Form2, Form3, Form4), ?Q(??Form1 "," ??Form2 "," ??Form3 "," ??Form4 ".")).
+-define(QUOTE(Form1, Form2, Form3, Form4),
+    ?Q(??Form1 "," ??Form2 "," ??Form3 "," ??Form4 ".")
+).
 
 %% Replaces forms matching `SearchPattern' using `ReplacementPattern' in
 %% `Forms'.

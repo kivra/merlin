@@ -7,6 +7,6 @@
 
 -define(in(Expression), and merlin_in_transform:'IN'(??Expression)).
 
--define(in(High, Low), in(High .. Low)).
+-define(in(High, Low), in(High..Low)).
 
 -endif.

@@ -71,11 +71,9 @@
 -define(else, true).
 
 -ifndef(TEST).
--define(variable_formatter,
-    fun(N) ->
-        binary_to_atom(iolist_to_binary(io_lib:format("~s~p~s", [Prefix, N, Suffix])))
-    end
-).
+-define(variable_formatter, fun(N) ->
+    binary_to_atom(iolist_to_binary(io_lib:format("~s~p~s", [Prefix, N, Suffix])))
+end).
 -else.
 %% During testing we ignore the randomly generated N, and use the process
 %% dictionary to keep track of the next number. This is to allow writing
@@ -83,20 +81,19 @@
 %%
 %% It use multiple counters, one per prefix/suffix combination. This makes it
 %% much easier to guess what the automatic variable will be.
--define(variable_formatter,
-    fun(_N) ->
-        test_variable_formatter(Prefix, Suffix)
-    end
-).
+-define(variable_formatter, fun(_N) ->
+    test_variable_formatter(Prefix, Suffix)
+end).
 
 test_variable_formatter(Prefix0, Suffix0) ->
     Prefix1 = iolist_to_binary(io_lib:format("~s", [Prefix0])),
     Suffix1 = iolist_to_binary(io_lib:format("~s", [Suffix0])),
     Key = {'merlin_lib:variable_counter', Prefix1, Suffix1},
-    N = case erlang:get(Key) of
-        undefined -> 1;
-        Number -> Number
-    end,
+    N =
+        case erlang:get(Key) of
+            undefined -> 1;
+            Number -> Number
+        end,
     put(Key, N + 1),
     binary_to_atom(iolist_to_binary(io_lib:format("~s~p~s", [Prefix1, N, Suffix1]))).
 -endif.
@@ -120,7 +117,7 @@ test_variable_formatter(Prefix0, Suffix0) ->
 -type bindings_by_type() :: #{
     env := ordsets:set(variable()),
     bound := ordsets:set(variable()),
-    free :=  ordsets:set(variable())
+    free := ordsets:set(variable())
 }.
 
 -type bindings_or_form() :: bindings() | merlin:ast().
@@ -139,9 +136,10 @@ file(Forms) ->
 -spec module([merlin:ast()]) -> module() | ''.
 module(Forms) ->
     case module_form(Forms) of
-        undefined -> '';
+        undefined ->
+            '';
         ModuleAttribute ->
-            [ModuleName|_MaybeParameterizedModuleArgument] =
+            [ModuleName | _MaybeParameterizedModuleArgument] =
                 erl_syntax:attribute_arguments(ModuleAttribute),
             erl_syntax:atom_value(ModuleName)
     end.
@@ -151,7 +149,7 @@ module(Forms) ->
 -spec module_form([merlin:ast()]) -> merlin:ast() | undefined.
 module_form(Forms) ->
     case get_attribute_forms(Forms, module) of
-        [ModuleAttribute|_] ->
+        [ModuleAttribute | _] ->
             ModuleAttribute;
         _ ->
             undefined
@@ -169,12 +167,13 @@ update_tree(Node, Form) when is_tuple(Form) ->
 %%
 %% @see erl_parse:format_error/1
 format_error(Message0) ->
-    Message1 = case io_lib:deep_char_list(Message0) of
-        true ->
-            Message0;
-        _ ->
-            io_lib:format("~tp", [Message0])
-    end,
+    Message1 =
+        case io_lib:deep_char_list(Message0) of
+            true ->
+                Message0;
+            _ ->
+                io_lib:format("~tp", [Message0])
+        end,
     case re:run(Message1, "^\\d+: (.+)$", [{capture, all_but_first, list}]) of
         {match, [Message2]} -> Message2;
         nomatch -> Message1
@@ -190,7 +189,7 @@ format_error(Message0) ->
     Reason :: term(),
     Stacktrace :: list({module(), atom(), arity(), [{atom(), term()}]}),
     Node :: merlin:ast().
-into_error_marker(Reason, [{_Module, _Function, _Arity, Location}|_]) ->
+into_error_marker(Reason, [{_Module, _Function, _Arity, Location} | _]) ->
     File = keyfind(Location, file, none),
     Line = keyfind(Location, line, 0),
     {error, {File, {Line, ?MODULE, Reason}}};
@@ -203,7 +202,8 @@ into_error_marker(Reason, Node) when is_tuple(Node) ->
 %% @doc Like {@link lists:keyfind/3} with a default value.
 keyfind(List, Key, Default) ->
     case lists:keyfind(Key, 1, List) of
-        {Key, Value} -> Value;
+        {Key, Value} ->
+            Value;
         false ->
             case get(Key) of
                 undefined -> Default;
@@ -231,7 +231,7 @@ get_annotations(Form) ->
 %% @doc Returns the given form with the given annotation set to the given
 %% value.
 set_annotation(Form, Annotation, Value) ->
-    update_annotations(Form, #{ Annotation => Value }).
+    update_annotations(Form, #{Annotation => Value}).
 
 %% @doc Returns the given form with the given annotations merged in.
 %% It seperates {@link erl_anno} annotations from user once, which means if
@@ -244,7 +244,8 @@ set_annotation(Form, Annotation, Value) ->
 update_annotations(Form, NewAnnotations) ->
     {ErlAnno, ErlSyntax} = get_annotations_internal(Form),
     {NewErlAnno, NewErlSyntax} = lists:partition(
-        fun is_erl_anno/1, maps:to_list(NewAnnotations)
+        fun is_erl_anno/1,
+        maps:to_list(NewAnnotations)
     ),
     UpdatedErlAnno = lists:foldl(fun set_erl_anno/2, ErlAnno, NewErlAnno),
     UpdatedErlSyntax = maps:merge(ErlSyntax, maps:from_list(NewErlSyntax)),
@@ -257,15 +258,15 @@ get_annotations_internal(Form) ->
     Anno = erl_syntax:get_pos(Form),
     ErlAnno = [
         {Name, get_erl_anno(Name, Anno)}
-    ||
-        Name <- ?ERL_ANNO_KEYS,
+     || Name <- ?ERL_ANNO_KEYS,
         get_erl_anno(Name, Anno) =/= undefined
     ],
     ErlSyntax = maps:from_list(erl_syntax:get_ann(Form)),
     ?assertEqual(
         [],
         ordsets:intersection(
-            ?ERL_ANNO_KEYS, ordsets:from_list(maps:keys(ErlSyntax))
+            ?ERL_ANNO_KEYS,
+            ordsets:from_list(maps:keys(ErlSyntax))
         ),
         "erl_anno keys must not be saved as erl_syntax annotations"
     ),
@@ -323,7 +324,8 @@ get_attribute(Tree, Name, Default) ->
 get_attributes(Tree, Name) when is_tuple(Tree) ->
     get_attributes(lists:flatten(erl_syntax:subtrees(Tree)), Name);
 get_attributes(Tree, Name) ->
-    lists:map(fun erl_syntax:attribute_arguments/1,
+    lists:map(
+        fun erl_syntax:attribute_arguments/1,
         get_attribute_forms(Tree, Name)
     ).
 
@@ -338,7 +340,7 @@ get_attribute_forms(Tree, Name) ->
 attribute_filter(Name) ->
     fun(Node) ->
         erl_syntax:type(Node) == attribute andalso
-        value(erl_syntax:attribute_name(Node)) == Name
+            value(erl_syntax:attribute_name(Node)) == Name
     end.
 
 %% @doc Returns the value of the given literal node as an Erlang term.
@@ -436,8 +438,8 @@ new_variable(BindingsOrForm, Prefix, Suffix) ->
     Name = erl_syntax_lib:new_variable_name(?variable_formatter, Set),
     case
         is_list(BindingsOrForm) orelse
-        is_map(BindingsOrForm) orelse
-        sets:is_set(BindingsOrForm)
+            is_map(BindingsOrForm) orelse
+            sets:is_set(BindingsOrForm)
     of
         true ->
             Name;
@@ -465,7 +467,9 @@ new_variables(BindingsOrForm, Total, Prefix) ->
 new_variables(BindingsOrForm, Total, Prefix, Suffix) ->
     Set = get_bindings(BindingsOrForm),
     Vars = erl_syntax_lib:new_variable_names(
-        Total, ?variable_formatter, Set
+        Total,
+        ?variable_formatter,
+        Set
     ),
     maybe_form(BindingsOrForm, Vars).
 
@@ -509,12 +513,13 @@ var_name(Form) ->
 %% variables.
 annotate_bindings(Forms0) when is_list(Forms0) ->
     Forms1 = lists:flatten(Forms0),
-    Env = case Forms1 of
-        [Form|_] ->
-            get_annotation(Form, env, ordsets:new());
-        _ ->
-            ordsets:new()
-    end,
+    Env =
+        case Forms1 of
+            [Form | _] ->
+                get_annotation(Form, env, ordsets:new());
+            _ ->
+                ordsets:new()
+        end,
     Tree = erl_syntax:form_list(Forms1),
     erl_syntax_lib:annotate_bindings(Tree, Env);
 annotate_bindings(Form) ->
@@ -572,9 +577,7 @@ get_bindings(BindingsOrForm) ->
 %% @doc Returns the bindings assosicated of the given `Type'
 -spec get_bindings_by_type(bindings(), Type) -> ordsets:ordset(atom()) when
     Type :: bound | env | free.
-get_bindings_by_type(#{bindings := Bindings}, Type) when
-    ?is_binding_type(Type)
-->
+get_bindings_by_type(#{bindings := Bindings}, Type) when ?is_binding_type(Type) ->
     get_binding_type(Bindings, Type);
 get_bindings_by_type(Bindings, Type) when
     ?is_binding_type(Type) andalso is_map_key(Type, Bindings)
@@ -597,9 +600,13 @@ get_bindings_by_type(BindingsOrForm, Type) when ?is_binding_type(Type) ->
 get_bindings_with_type(#{bindings := Bindings}) ->
     get_bindings_with_type(Bindings);
 get_bindings_with_type(#{bound := Bound, env := Env, free := Free}) ->
-    Bindings = ordsets:union(lists:map(fun into_ordset/1, [
-        Env, Bound, Free
-    ])),
+    Bindings = ordsets:union(
+        lists:map(fun into_ordset/1, [
+            Env,
+            Bound,
+            Free
+        ])
+    ),
     maps:from_list([
         case is_element(Bound, Binding) of
             true ->
@@ -617,8 +624,7 @@ get_bindings_with_type(#{bound := Bound, env := Env, free := Free}) ->
                         end
                 end
         end
-    ||
-        Binding <- Bindings
+     || Binding <- Bindings
     ]);
 get_bindings_with_type(BindingsOrForm) ->
     case sets:is_set(BindingsOrForm) of
@@ -657,8 +663,8 @@ add_binding(Bindings, NewBinding) ->
         Variable :: variable();
     (merlin:ast(), set()) -> merlin:ast().
 add_bindings(#{bindings := Bindings} = Input, NewBindings) ->
-    Input#{ bindings => add_bindings(Bindings, NewBindings) };
-add_bindings(#{ env := _Env, bound := Bound0, free := Free0 } = Input, New0) ->
+    Input#{bindings => add_bindings(Bindings, NewBindings)};
+add_bindings(#{env := _Env, bound := Bound0, free := Free0} = Input, New0) ->
     New1 = into_ordset(New0),
     New2 = lists:map(fun var_name/1, New1),
     Free1 = ordsets:subtract(Free0, New2),
@@ -680,12 +686,14 @@ add_bindings(BindingsOrForm, NewBindings0) ->
                     ordsets:union(BindingsOrForm, NewBindings2);
                 false ->
                     UpdatedBindings = add_bindings(
-                        get_annotations(BindingsOrForm), NewBindings2
+                        get_annotations(BindingsOrForm),
+                        NewBindings2
                     ),
-                    if is_map(UpdatedBindings) ->
-                        update_annotations(BindingsOrForm, UpdatedBindings);
-                    ?else ->
-                        set_annotation(BindingsOrForm, bound, UpdatedBindings)
+                    if
+                        is_map(UpdatedBindings) ->
+                            update_annotations(BindingsOrForm, UpdatedBindings);
+                        ?else ->
+                            set_annotation(BindingsOrForm, bound, UpdatedBindings)
                     end
             end
     end.

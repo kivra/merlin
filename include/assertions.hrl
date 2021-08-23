@@ -71,7 +71,7 @@ end).
 %%
 %% Returns the type of the form.
 -define(assertIsForm(Expr), begin
-    ((fun() ->
+    (fun() ->
         Node__ = Expr,
         try erl_syntax:type(Node__) of
             __Type__ -> __Type__
@@ -79,40 +79,37 @@ end).
             error:{badarg, Node__}:__Stacktrace__ ->
                 erlang:raise(
                     error,
-                    {assert,
-                        [
-                            {module, ?MODULE},
-                            {line, ?LINE},
-                            {expression, "erl_syntax:type(" ??Expr ")"},
-                            {expected, true},
-                            {value, false}
-                        ]
-                    },
+                    {assert, [
+                        {module, ?MODULE},
+                        {line, ?LINE},
+                        {expression, "erl_syntax:type(" ??Expr ")"},
+                        {expected, true},
+                        {value, false}
+                    ]},
                     __Stacktrace__
                 )
         end
-    end))()
+    end)()
 end).
 
 %% Asserts that the given `Expr' is a valid form with the given `Type'.
 -define(assertNodeType(Expr, Type), begin
-    ((fun() ->
+    (fun() ->
         Type__ = Type,
         case ?assertIsForm(Expr) of
-            Type__ -> ok;
+            Type__ ->
+                ok;
             __Value__ ->
                 erlang:error(
-                    {assertEqual,
-                        [
-                            {module, ?MODULE},
-                            {line, ?LINE},
-                            {expression, "erl_syntax:type(" ??Expr ") =:= " ??Type},
-                            {expected, Type__},
-                            {value, __Value__}
-                        ]
-                    }
+                    {assertEqual, [
+                        {module, ?MODULE},
+                        {line, ?LINE},
+                        {expression, "erl_syntax:type(" ??Expr ") =:= " ??Type},
+                        {expected, Type__},
+                        {value, __Value__}
+                    ]}
                 )
         end
-    end))()
+    end)()
 end).
 -endif.

@@ -11,7 +11,7 @@
 ]).
 
 parse_transform(Forms, Options) ->
-    Result = transform(Forms, #{ options => Options }),
+    Result = transform(Forms, #{options => Options}),
     merlin:return(Result).
 
 format_error({ambiguous_binding_usage, Name}) ->
@@ -22,7 +22,8 @@ format_error({ambiguous_binding_usage, Name}) ->
     );
 format_error({unbound_auto_incrementing_binding, Name}) ->
     io_lib:format(
-        "Missing auto incrementing variable `~s@`.", [Name]
+        "Missing auto incrementing variable `~s@`.",
+        [Name]
     );
 format_error({unknown_return, Unknown}) ->
     io_lib:format(
@@ -125,9 +126,9 @@ transform_pin_operator(_, _, _) ->
     continue.
 
 auto_incrementable(Var) ->
-    erl_syntax:type(Var) =:= variable
-    andalso lists:suffix("@", erl_syntax:variable_literal(Var)).
+    erl_syntax:type(Var) =:= variable andalso
+        lists:suffix("@", erl_syntax:variable_literal(Var)).
 
 is_pinnable(Var) ->
-    erl_syntax:type(Var) =:= variable
-    andalso lists:suffix("_", erl_syntax:variable_literal(Var)).
+    erl_syntax:type(Var) =:= variable andalso
+        lists:suffix("_", erl_syntax:variable_literal(Var)).

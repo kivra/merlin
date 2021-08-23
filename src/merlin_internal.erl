@@ -23,18 +23,38 @@
 -compile([export_all, nowarn_export_all]).
 -endif.
 
-'DEFINE PROCEDURAL MACRO'(File, Line, Module, 'MERLIN INTERNAL DEFINE PROCEDURAL MACRO', 0, Macro, _BodyFun) ->
+'DEFINE PROCEDURAL MACRO'(
+    File,
+    Line,
+    Module,
+    'MERLIN INTERNAL DEFINE PROCEDURAL MACRO',
+    0,
+    Macro,
+    _BodyFun
+) ->
     Function = '',
     Arity = 0,
-    erlang:raise(error, {missing_parse_transform, lists:concat([
-        "To use merlin macros you must enable the merlin parse transform. ",
-        "In macro expression ?", Macro
-    ])}, [{Module, Function, Arity, [{file, File}, {line, Line}]}]);
+    erlang:raise(
+        error,
+        {missing_parse_transform,
+            lists:concat([
+                "To use merlin macros you must enable the merlin parse transform. ",
+                "In macro expression ?",
+                Macro
+            ])},
+        [{Module, Function, Arity, [{file, File}, {line, Line}]}]
+    );
 'DEFINE PROCEDURAL MACRO'(File, Line, Module, Function, Arity, Macro, _BodyFun) ->
-    erlang:raise(error, {missing_parse_transform, lists:concat([
-        "To use merlin macros you must enable the merlin parse transform. ",
-        "In macro expression ?", Macro
-    ])}, [{Module, Function, Arity, [{file, File}, {line, Line}]}]).
+    erlang:raise(
+        error,
+        {missing_parse_transform,
+            lists:concat([
+                "To use merlin macros you must enable the merlin parse transform. ",
+                "In macro expression ?",
+                Macro
+            ])},
+        [{Module, Function, Arity, [{file, File}, {line, Line}]}]
+    ).
 
 %% @private
 %% @doc This is a helper for the ?level(A, B, C) macros.
@@ -61,20 +81,23 @@ write_log_file() ->
 %% {@link erl_pp}, then as normal Erlang forms, {@link merlin:revert/1.
 %% reverting} as needed, and finally just using `"~tp"' with {@link
 %% io_lib:format/2}.
--spec format_forms({string(), merlin:ast() | [merlin:ast()] | term()}) -> {string(), [iolist()]}.
+-spec format_forms({string(), merlin:ast() | [merlin:ast()] | term()}) ->
+    {string(), [iolist()]}.
 format_forms({Prefix, Forms}) when is_list(Prefix) ->
-    {"~s~n~s", [Prefix, lists:join($\n, [
-        try
-            pretty(Form)
-        catch
-            throw:invalid_form ->
-                io_lib:format("~tp", [merlin:revert(Form)]);
-            _:_ ->
-                io_lib:format("~tp", [Form])
-        end
-    ||
-        Form <- lists:flatten([Forms])
-    ])]};
+    {"~s~n~s", [
+        Prefix,
+        lists:join($\n, [
+            try
+                pretty(Form)
+            catch
+                throw:invalid_form ->
+                    io_lib:format("~tp", [merlin:revert(Form)]);
+                _:_ ->
+                    io_lib:format("~tp", [Form])
+            end
+         || Form <- lists:flatten([Forms])
+        ])
+    ]};
 format_forms(Forms) ->
     format_forms({"", Forms}).
 
@@ -96,15 +119,17 @@ format_merl_guard(Line, GuardSource) ->
     FormattedClause0 = merlin_merl:format(Clause),
     FormattedClause1 = string:replace(FormattedClause0, "merl:quote", "?Q", all),
     FormattedClause2 = re:replace(
-        FormattedClause1, " *->\\s+ok\\s+$", "", [multiline]
+        FormattedClause1,
+        " *->\\s+ok\\s+$",
+        "",
+        [multiline]
     ),
     re:replace(FormattedClause2, "\\s+", " ", [multiline]).
 
 %% @doc Returns the given stack trace into something nice, with colors and all.
 %% This makes it more amenable for reading, and also openable in your
 %% favorite editor.
--spec format_stack([Frame]) -> iolist()
-when
+-spec format_stack([Frame]) -> iolist() when
     Frame :: {module(), FunctionName, ArityOrArguments, Location},
     FunctionName :: atom(),
     ArityOrArguments :: arity() | [term()],
@@ -116,24 +141,32 @@ format_stack(StackTrace) ->
     Dimmed = "\e[2;39m",
     Normal = "\e[0m",
     [
-        if is_integer(ArityOrArguments) ->
-            io_lib:format("  ~s:~s/~p ~sin~s ~s:~p~n", [
-                    Module, Function, ArityOrArguments,
-                    Dimmed, Normal,
+        if
+            is_integer(ArityOrArguments) ->
+                io_lib:format("  ~s:~s/~p ~sin~s ~s:~p~n", [
+                    Module,
+                    Function,
+                    ArityOrArguments,
+                    Dimmed,
+                    Normal,
                     proplists:get_value(file, Location, none),
                     proplists:get_value(line, Location, none)
                 ]);
-        true ->
-            io_lib:format("  ~s:~s/~p ~swith~s ~tw ~sin~s ~s:~p~n", [
-                    Module, Function, length(ArityOrArguments),
-                    Dimmed, Normal, ArityOrArguments,
-                    Dimmed, Normal,
+            true ->
+                io_lib:format("  ~s:~s/~p ~swith~s ~tw ~sin~s ~s:~p~n", [
+                    Module,
+                    Function,
+                    length(ArityOrArguments),
+                    Dimmed,
+                    Normal,
+                    ArityOrArguments,
+                    Dimmed,
+                    Normal,
                     proplists:get_value(file, Location, none),
                     proplists:get_value(line, Location, none)
                 ])
         end
-    ||
-        {Module, Function, ArityOrArguments, Location} <- StackTrace
+     || {Module, Function, ArityOrArguments, Location} <- StackTrace
     ].
 
 %% @doc Formats the given exception using {@link erl_error}.
@@ -145,7 +178,7 @@ format_using_erl_error(Reason, StackTrace) ->
     StackFilter = fun(_M, _F, _A) -> true end,
     Formatter = fun(Term, _Indent) -> io_lib:format("~tp", [Term]) end,
     Options = #{
-         stack_trim_fun => StackFilter,
+        stack_trim_fun => StackFilter,
         format_fun => Formatter
     },
     erl_error:format_exception(Class, Reason, StackTrace, Options).
@@ -158,7 +191,13 @@ format_using_erl_error(Reason, StackTrace) ->
     Formatter = fun(Term, _Indent) -> io_lib:format("~tp", [Term]) end,
     Encoding = utf8,
     erl_error:format_exception(
-        Indent, Class, Reason, StackTrace, StackFilter, Formatter, Encoding
+        Indent,
+        Class,
+        Reason,
+        StackTrace,
+        StackFilter,
+        Formatter,
+        Encoding
     ).
 -endif.
 
@@ -167,18 +206,20 @@ format_using_erl_error(Reason, StackTrace) ->
 pretty(Nodes) when is_list(Nodes) ->
     lists:map(fun pretty/1, Nodes);
 pretty(Node) ->
-    Columns = case io:columns() of
-        {ok, Value} -> Value;
-        {error, enotsup} -> 120
-    end,
+    Columns =
+        case io:columns() of
+            {ok, Value} -> Value;
+            {error, enotsup} -> 120
+        end,
     Options = [{linewidth, Columns}],
     Form = merlin:revert(Node),
-    IOList = case erl_syntax:is_form(Form) of
-        true ->
-            erl_pp:form(Form, Options);
-        false ->
-            erl_pp:expr(Form, Options)
-    end,
+    IOList =
+        case erl_syntax:is_form(Form) of
+            true ->
+                erl_pp:form(Form, Options);
+            false ->
+                erl_pp:expr(Form, Options)
+        end,
     case is_invalid(IOList) of
         true -> throw(invalid_form);
         false -> IOList
@@ -194,22 +235,27 @@ is_invalid(IOList) ->
     foldl_iolist(fun match_prefix/2, "INVALID-FORM", IOList).
 
 match_prefix(_, []) -> true;
-match_prefix(Char, [Char|RestToMatch]) -> RestToMatch;
+match_prefix(Char, [Char | RestToMatch]) -> RestToMatch;
 match_prefix(_, true) -> true;
 match_prefix(_, _) -> false.
 
-foldl_iolist(_, Result, []) -> Result;
-foldl_iolist(_, Result, <<>>) -> Result;
-foldl_iolist(Fun, AccIn, [Nested|Rest]) when is_list(Nested) orelse is_binary(Nested) ->
+foldl_iolist(_, Result, []) ->
+    Result;
+foldl_iolist(_, Result, <<>>) ->
+    Result;
+foldl_iolist(Fun, AccIn, [Nested | Rest]) when
+    is_list(Nested) orelse is_binary(Nested)
+->
     AccOut = foldl_iolist(Fun, AccIn, Nested),
     foldl_iolist(Fun, AccOut, Rest);
 foldl_iolist(Fun, AccIn, Binary) when is_binary(Binary) ->
     foldl_binary(Fun, AccIn, Binary);
-foldl_iolist(Fun, AccIn, [Char|Rest]) when is_integer(Char) ->
+foldl_iolist(Fun, AccIn, [Char | Rest]) when is_integer(Char) ->
     AccOut = Fun(Char, AccIn),
     foldl_iolist(Fun, AccOut, Rest).
 
-foldl_binary(_, Result, <<>>) -> Result;
+foldl_binary(_, Result, <<>>) ->
+    Result;
 foldl_binary(Fun, AccIn, <<Char/utf8>>) ->
     Fun(Char, AccIn);
 foldl_binary(Fun, AccIn, <<Char/utf8, Rest/binary>>) ->
@@ -227,10 +273,10 @@ split_by(List, Fun) when is_list(List) andalso is_function(Fun, 1) ->
 
 split_by([], _Fun, Acc) ->
     {lists:reverse(Acc), undefined, []};
-split_by([Head|Tail], Fun, Acc) ->
+split_by([Head | Tail], Fun, Acc) ->
     case Fun(Head) of
-        true  -> {lists:reverse(Acc), Head, Tail};
-        false -> split_by(Tail, Fun, [Head|Acc])
+        true -> {lists:reverse(Acc), Head, Tail};
+        false -> split_by(Tail, Fun, [Head | Acc])
     end.
 
 %% @doc Returns the MFA tuple for the given `fun'.
@@ -250,7 +296,8 @@ export_all(Module) when is_atom(Module) ->
     {Module, Beam0, Beamfile} = code:get_object_code(Module),
     {ok, {_, [{abstract_code, {_, AST}}]}} = beam_lib:chunks(Beam0, [abstract_code]),
     {ok, Module, Beam1, _Warnings} = compile:forms(
-        AST, [export_all, nowarn_export_all, return|Options]
+        AST,
+        [export_all, nowarn_export_all, return | Options]
     ),
     code:load_binary(Module, Beamfile, Beam1).
 
@@ -266,12 +313,12 @@ quote(File0, Line0, Source0) ->
     File1 = safe_value(File0),
     Line1 = safe_value(Line0),
     Source1 = safe_value(Source0),
-    try
-        merl:quote(Line1, Source1)
-    of AST ->
-        {ok, AST}
-    catch throw:{error, SyntaxError} ->
-        {error, {File1, {Line1, ?MODULE, SyntaxError}}}
+    try merl:quote(Line1, Source1) of
+        AST ->
+            {ok, AST}
+    catch
+        throw:{error, SyntaxError} ->
+            {error, {File1, {Line1, ?MODULE, SyntaxError}}}
     end.
 
 %% @private
