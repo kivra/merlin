@@ -64,7 +64,6 @@
 
 -export_type([
     bindings/0,
-    bindings_by_type/0,
     bindings_or_form/0
 ]).
 
@@ -109,18 +108,22 @@ test_variable_formatter(Prefix0, Suffix0) ->
 -type set() :: set(variable()).
 -type set(T) :: sets:set(T) | ordsets:ordset(T).
 
--type bindings() ::
-    bindings_by_type()
-    | #{bindings := bindings_by_type()}
-    | set(variable()).
-
--type bindings_by_type() :: #{
+-type bindings() :: #{
     env := ordsets:set(variable()),
     bound := ordsets:set(variable()),
     free := ordsets:set(variable())
 }.
 
 -type bindings_or_form() :: bindings() | merlin:ast().
+
+-type binding_type() :: env | bound | free.
+
+%% A bit dirty to know about the internal structure like this, but
+%% {@link erl_syntax:syntaxTree/0} also includes the vanilla ASt and dialyser
+%% doesn't always approve of that.
+-type erl_syntax_ast() ::
+    {tree, any(), any(), any()}
+    | {wrapper, any(), any(), any()}.
 
 %% @doc Returns the filename for the first `-file' attribute in `Forms', or
 %% `""' if not found.
@@ -241,20 +244,22 @@ set_annotation(Form, Annotation, Value) ->
 %% @see erl_anno
 %% @see erl_syntax:get_pos/1
 %% @see erl_syntax:get_ann/1
-update_annotations(Form, NewAnnotations) ->
-    {ErlAnno, ErlSyntax} = get_annotations_internal(Form),
+update_annotations(Form0, NewAnnotations) when is_map(NewAnnotations) ->
+    {ErlAnno, ErlSyntax} = get_annotations_internal(Form0),
     {NewErlAnno, NewErlSyntax} = lists:partition(
         fun is_erl_anno/1,
         maps:to_list(NewAnnotations)
     ),
     UpdatedErlAnno = lists:foldl(fun set_erl_anno/2, ErlAnno, NewErlAnno),
     UpdatedErlSyntax = maps:merge(ErlSyntax, maps:from_list(NewErlSyntax)),
-    Form1 = erl_syntax:set_pos(Form, UpdatedErlAnno),
-    erl_syntax:set_ann(Form1, maps:to_list(UpdatedErlSyntax)).
+    Form1 = erl_syntax:set_pos(Form0, UpdatedErlAnno),
+    Form2 = erl_syntax:set_ann(Form1, maps:to_list(UpdatedErlSyntax)),
+    Form2.
 
 %% @private
 %% @doc Returns all annotations from {@link erl_anno} and {@link erl_syntax}.
 get_annotations_internal(Form) ->
+    ?assertIsForm(Form),
     Anno = erl_syntax:get_pos(Form),
     ErlAnno = [
         {Name, get_erl_anno(Name, Anno)}
@@ -434,23 +439,13 @@ new_variable(BindingsOrForm, Prefix) ->
 %%
 %% @see erl_syntax_lib:new_variable_name/1
 new_variable(BindingsOrForm, Prefix, Suffix) ->
-    Set = get_bindings(BindingsOrForm),
+    Set = into_set(BindingsOrForm),
     Name = erl_syntax_lib:new_variable_name(?variable_formatter, Set),
-    case
-        is_list(BindingsOrForm) orelse
-            is_map(BindingsOrForm) orelse
-            sets:is_set(BindingsOrForm)
-    of
-        true ->
-            Name;
-        false ->
-            ?assertIsForm(BindingsOrForm),
-            var(BindingsOrForm, Name)
-    end.
+    hd(maybe_form(BindingsOrForm, [Name])).
 
 %% @doc Same as {@link new_variables/4} with default prefix and suffix.
 new_variables(Total) when is_integer(Total) ->
-    new_variables(sets:new(), Total).
+    new_variables(ordsets:new(), Total).
 
 %% @doc Same as {@link new_variables/4} with the given prefix and default
 %% suffix.
@@ -465,25 +460,16 @@ new_variables(BindingsOrForm, Total, Prefix) ->
 %%
 %% @see erl_syntax_lib:new_variable_names/3
 new_variables(BindingsOrForm, Total, Prefix, Suffix) ->
-    Set = get_bindings(BindingsOrForm),
-    Vars = erl_syntax_lib:new_variable_names(
-        Total,
-        ?variable_formatter,
-        Set
-    ),
+    Set = into_set(BindingsOrForm),
+    Vars = erl_syntax_lib:new_variable_names(Total, ?variable_formatter, Set),
     maybe_form(BindingsOrForm, Vars).
 
 %% @private
-maybe_form(Bindings, Variables) when is_list(Bindings) ->
+maybe_form(Bindings, Variables) when is_map(Bindings) orelse is_list(Bindings) ->
     ordsets:from_list(Variables);
-maybe_form(BindingsOrForm, Variables) ->
-    case sets:is_set(BindingsOrForm) of
-        true ->
-            Variables;
-        false ->
-            ?assertIsForm(BindingsOrForm),
-            [var(BindingsOrForm, Name) || Name <- Variables]
-    end.
+maybe_form(Form, Variables) ->
+    ?assertIsForm(Form),
+    [var(Form, Name) || Name <- Variables].
 
 %% @private
 -spec var(merlin:ast(), variable()) -> merlin:ast().
@@ -493,13 +479,14 @@ var(Form, Name) when is_atom(Name) ->
         generated,
         true
     );
-var(Form, Var) ->
+var(Form, Var) when is_tuple(Form) ->
     erl_syntax:copy_attrs(Form, Var).
 
 %% @private
+-spec var_name(variable()) -> atom().
 var_name(Name) when is_atom(Name) ->
     Name;
-var_name(Form) ->
+var_name(Form) when is_tuple(Form) ->
     erl_syntax:variable_name(Form).
 
 %% @doc Annotates the given form or forms using
@@ -533,18 +520,16 @@ annotate_bindings(Form) ->
 %%
 %% @see erl_syntax_lib:annotate_bindings/2
 -spec get_binding_type(bindings_or_form(), atom()) -> bound | env | free | unknown.
-get_binding_type(#{bindings := Bindings}, Name) ->
-    get_binding_type(Bindings, Name);
 get_binding_type(#{bound := Bound, env := Env, free := Free}, Name) ->
-    case is_element(Bound, Name) of
+    case ordsets:is_element(Name, Bound) of
         true ->
             bound;
         false ->
-            case is_element(Env, Name) of
+            case ordsets:is_element(Name, Env) of
                 true ->
                     env;
                 false ->
-                    case is_element(Free, Name) of
+                    case ordsets:is_element(Name, Free) of
                         true ->
                             free;
                         false ->
@@ -552,39 +537,25 @@ get_binding_type(#{bound := Bound, env := Env, free := Free}, Name) ->
                     end
             end
     end;
-get_binding_type(BindingsOrForm, Name) ->
-    case sets:is_set(BindingsOrForm) of
-        true ->
-            unknown;
-        false ->
-            get_binding_type(get_annotations(BindingsOrForm), Name)
-    end.
+get_binding_type(Form, Name) when is_tuple(Form) ->
+    get_binding_type(get_annotations(Form), Name).
 
 %% @doc Get all bindings for the given value.
-%% Can be a set of annotations, see {@ get_annotations/1}, {@link sets} set
-%% or {@link merlin:ast/0} form.
--spec get_bindings(bindings_or_form()) -> sets:set(variable()).
-get_bindings(#{bindings := Bindings}) ->
-    get_bindings(Bindings);
+%% Can be a set of annotations, see {@ get_annotations/1}, or
+%% {@link merlin:ast/0} form from which those annotations are taken.
+-spec get_bindings(bindings_or_form()) -> ordsets:ordset(atom()).
 get_bindings(#{bound := Bound, env := Env, free := Free}) ->
-    sets:from_list(lists:flatten([Env, Bound, Free]));
-get_bindings(BindingsOrForm) ->
-    case sets:is_set(BindingsOrForm) of
-        true ->
-            BindingsOrForm;
-        false ->
-            get_bindings(get_annotations(BindingsOrForm))
-    end.
+    lists:map(fun var_name/1, ordsets:union([Env, Bound, Free]));
+get_bindings(Form) when is_tuple(Form) ->
+    get_bindings(get_annotations(Form)).
 
 %% @doc Returns the bindings assosicated of the given `Type'
--spec get_bindings_by_type(bindings(), Type) -> ordsets:ordset(atom()) when
-    Type :: bound | env | free.
-get_bindings_by_type(#{bindings := Bindings}, Type) when ?is_binding_type(Type) ->
-    get_binding_type(Bindings, Type);
+-spec get_bindings_by_type(bindings_or_form(), binding_type()) ->
+    ordsets:ordset(atom()).
 get_bindings_by_type(Bindings, Type) when
     ?is_binding_type(Type) andalso is_map_key(Type, Bindings)
 ->
-    lists:map(fun var_name/1, into_ordset(maps:get(Type, Bindings)));
+    lists:map(fun var_name/1, maps:get(Type, Bindings));
 get_bindings_by_type(BindingsOrForm, Type) when ?is_binding_type(Type) ->
     case sets:is_set(BindingsOrForm) of
         true ->
@@ -599,26 +570,19 @@ get_bindings_by_type(BindingsOrForm, Type) when ?is_binding_type(Type) ->
 %% free.
 %%
 %% @see erl_syntax_lib:annotate_bindings/2
-get_bindings_with_type(#{bindings := Bindings}) ->
-    get_bindings_with_type(Bindings);
+-spec get_bindings_with_type(bindings_or_form()) -> #{variable() := binding_type()}.
 get_bindings_with_type(#{bound := Bound, env := Env, free := Free}) ->
-    Bindings = ordsets:union(
-        lists:map(fun into_ordset/1, [
-            Env,
-            Bound,
-            Free
-        ])
-    ),
+    Bindings = ordsets:union([Env, Bound, Free]),
     maps:from_list([
-        case is_element(Bound, Binding) of
+        case ordsets:is_element(Bound, Binding) of
             true ->
                 {Binding, bound};
             false ->
-                case is_element(Env, Binding) of
+                case ordsets:is_element(Env, Binding) of
                     true ->
-                        {Binding, bound};
+                        {Binding, env};
                     false ->
-                        case is_element(Free, Binding) of
+                        case ordsets:is_element(Free, Binding) of
                             true ->
                                 {Binding, free};
                             false ->
@@ -628,26 +592,16 @@ get_bindings_with_type(#{bound := Bound, env := Env, free := Free}) ->
         end
      || Binding <- Bindings
     ]);
-get_bindings_with_type(BindingsOrForm) ->
-    case sets:is_set(BindingsOrForm) of
-        true ->
-            error(badarg);
-        false ->
-            get_bindings_with_type(get_annotations(BindingsOrForm))
-    end.
+get_bindings_with_type(Form) when is_tuple(Form) ->
+    get_bindings_with_type(get_annotations(Form)).
 
 %% @doc Adds the given binding to the existing ones.
 %% See {@link add_bindings/2}.
 -spec add_binding
-    (#{bindings := bindings_by_type()}, atom()) -> #{bindings := bindings_by_type()};
-    (bindings_by_type(), atom()) -> bindings_by_type();
-    (sets:set(Variable), atom()) -> sets:set(Variable) when
-        Variable :: variable();
-    (ordsets:set(Variable), atom()) -> ordsets:ordset(Variable) when
-        Variable :: variable();
-    (merlin:ast(), atom()) -> merlin:ast().
-add_binding(Bindings, NewBinding) ->
-    add_bindings(Bindings, [NewBinding]).
+    (bindings(), variable()) -> bindings();
+    (merlin:ast(), variable()) -> erl_syntax_ast().
+add_binding(BindingsOrForm, NewBinding) ->
+    add_bindings(BindingsOrForm, [NewBinding]).
 
 %% @doc Adds the given bindings to the existing ones.
 %% Accepts the same input as {@link get_bindings}.
@@ -657,79 +611,51 @@ add_binding(Bindings, NewBinding) ->
 %% When given a map of bindings as returned by {@link get_bindings_with_type},
 %% it updates the `free' and `bound' fields as appropriate.
 -spec add_bindings
-    (#{bindings := bindings_by_type()}, set()) -> #{bindings := bindings_by_type()};
-    (bindings_by_type(), set()) -> bindings_by_type();
-    (sets:set(Variable), set()) -> sets:set(Variable) when
-        Variable :: variable();
-    (ordsets:set(Variable), set()) -> ordsets:ordset(Variable) when
-        Variable :: variable();
-    (merlin:ast(), set()) -> merlin:ast().
-add_bindings(#{bindings := Bindings} = Input, NewBindings) ->
-    Input#{bindings => add_bindings(Bindings, NewBindings)};
-add_bindings(#{env := _Env, bound := Bound0, free := Free0} = Input, New0) ->
-    New1 = into_ordset(New0),
-    New2 = lists:map(fun var_name/1, New1),
-    Free1 = ordsets:subtract(Free0, New2),
-    Bound1 = ordsets:union(Bound0, New2),
-    Input#{
+    (bindings(), set()) -> bindings();
+    (merlin:ast(), set()) -> erl_syntax_ast().
+add_bindings(#{env := _, bound := _, free := _} = Bindings, NewBindings) ->
+    merge_bindings(Bindings, NewBindings);
+add_bindings(Form, NewBindings) when is_tuple(Form) ->
+    Bindings0 = get_annotations(Form),
+    Bindings1 = maps:merge(#{env => [], bound => [], free => []}, Bindings0),
+    Bindings2 = merge_bindings(Bindings1, NewBindings),
+    update_annotations(Form, Bindings2).
+
+%% @private
+merge_bindings(
+    #{env := Env0, bound := Bound0, free := Free0} = Bindings,
+    #{env := NewEnv, bound := NewBound, free := NewFree}
+) ->
+    Env1 = ordsets:union(Env0, NewEnv),
+    Bound1 = ordsets:union(Bound0, NewBound),
+    Free1 = ordsets:union(Free0, NewFree),
+    Free2 = ordsets:subtract(Free1, Bound1),
+    Bindings#{
+        env := Env1,
+        bound := Bound1,
+        free := Free2
+    };
+merge_bindings(
+    #{env := _Env, bound := Bound0, free := Free0} = Bindings,
+    NewBindings0
+) when is_list(NewBindings0) ->
+    NewBindings1 = lists:map(fun var_name/1, NewBindings0),
+    Free1 = ordsets:subtract(Free0, NewBindings1),
+    Bound1 = ordsets:union(Bound0, NewBindings1),
+    Bindings#{
         free := Free1,
         bound := Bound1
-    };
-add_bindings(BindingsOrForm, NewBindings0) ->
-    NewBindings1 = into_ordset(NewBindings0),
-    NewBindings2 = lists:map(fun var_name/1, NewBindings1),
-    case sets:is_set(BindingsOrForm) of
-        true ->
-            Set = sets:from_list(NewBindings2),
-            sets:union(BindingsOrForm, Set);
-        false ->
-            case ordsets:is_set(BindingsOrForm) of
-                true ->
-                    ordsets:union(BindingsOrForm, NewBindings2);
-                false ->
-                    UpdatedBindings = add_bindings(
-                        get_annotations(BindingsOrForm),
-                        NewBindings2
-                    ),
-                    if
-                        is_map(UpdatedBindings) ->
-                            update_annotations(BindingsOrForm, UpdatedBindings);
-                        ?else ->
-                            set_annotation(BindingsOrForm, bound, UpdatedBindings)
-                    end
-            end
-    end.
+    }.
 
-%% @private
--spec into_ordset(set(T)) -> ordsets:set(T).
-into_ordset(List) when is_list(List) ->
-    %% May be unsorted and/or not unique
-    ordsets:from_list(List);
-into_ordset(Set) ->
-    case sets:is_set(Set) of
+into_set(Ordset) when is_list(Ordset) ->
+    sets:from_list(Ordset);
+into_set(Annotations) when is_map(Annotations) ->
+    sets:from_list(get_bindings(Annotations));
+into_set(SetOrForm) when is_tuple(SetOrForm) ->
+    case sets:is_set(SetOrForm) of
         true ->
-            ordsets:from_list(sets:to_list(Set));
+            SetOrForm;
         false ->
-            case ordsets:is_set(Set) of
-                true ->
-                    Set;
-                false ->
-                    error(badarg)
-            end
-    end.
-
-%% @private
-%% @doc Works like {@link set:is_element/2} and {@link ordset:is_element/2},
-%% handling both types of sets.
-is_element(Set, Key) ->
-    case sets:is_set(Set) of
-        true ->
-            sets:is_element(Key, Set);
-        false ->
-            case ordsets:is_set(Set) of
-                true ->
-                    ordsets:is_element(Key, Set);
-                false ->
-                    error(badarg)
-            end
+            ?assertIsForm(SetOrForm),
+            sets:from_list(get_bindings(SetOrForm))
     end.

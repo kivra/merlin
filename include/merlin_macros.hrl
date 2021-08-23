@@ -41,7 +41,7 @@
         VariableMapping = maps:from_list(
             lists:zip(
                 sets:to_list(Variables),
-                merlin_lib:new_variables(Variables, sets:size(Variables))
+                merlin_lib:new_variables(sets:size(Variables))
             )
         ),
         {[Form], _} = merlin:transform(

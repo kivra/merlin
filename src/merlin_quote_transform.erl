@@ -181,7 +181,6 @@ switch(Arguments, [Clause | Clauses]) when
 transform([], _Options) ->
     [];
 transform(Forms, Options) ->
-    % erlang:system_flag(backtrace_depth, 20),
     AnnotatedForms = merlin:annotate(Forms, [file, bindings]),
     {FinalForms, _FinalState} = merlin:transform(
         AnnotatedForms,
@@ -619,7 +618,7 @@ when
     TemporaryVariable :: merlin:ast().
 replace_merl_with_temporary_variables(Parent0, FormsToReplace) ->
     State = #{
-        bindings => merlin_lib:get_bindings(Parent0),
+        bindings => merlin_lib:get_annotations(Parent0),
         replacements => []
     },
     {Result, #{

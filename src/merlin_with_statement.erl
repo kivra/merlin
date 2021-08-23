@@ -10,7 +10,7 @@ parse_transform({error, _Errors, _Warnings} = Result, _Options) ->
 parse_transform({warning, _Tree, _Warnings} = Result, _Options) ->
     Result;
 parse_transform(Forms, Options) ->
-    AnnotatedForms = merlin:annotate(Forms, [file]),
+    AnnotatedForms = merlin:annotate(Forms, [file, bindings]),
     {FinalForms, _FinalState} = merlin:transform(
         AnnotatedForms,
         fun transform_with_statement/3,
@@ -27,9 +27,7 @@ transform_with_statement(
     ?QQ(["'@Name'(_@Args) when _@__@Guard -> _@_@Body."]) = Form,
     State
 ) ->
-    {continue, Form, State#{
-        bindings => erl_syntax_lib:variables(Form)
-    }};
+    {continue, Form, State};
 transform_with_statement(
     enter,
     ?QQ([
@@ -99,34 +97,26 @@ success_case_type(_) -> match.
 with_statement(_, undefined, undefined, Expressions, _, _) ->
     {Init, Last} = wrap_list_comprehension(Expressions),
     ?QQ("erlang:hd([_@Last || _@Init])");
-with_statement(State, undefined, match_all, Expressions, _, ErrorCases) ->
+with_statement(_, undefined, match_all, Expressions, _, ErrorCases) ->
     {Init, Last} = wrap_list_comprehension(Expressions),
     ?QQ("_ -> _@ErrorCase") = hd(ErrorCases),
-    {Var, NewState} = success_var(State),
-    {
-        continue,
-        ?QQ([
-            "case [_@Last || _@Init] of",
-            "    []      -> _@ErrorCase;",
-            "    [_@Var] -> _@Var",
-            "end"
-        ]),
-        NewState
-    };
-with_statement(State0, undefined, match_pattern, Expressions, _, ErrorCases) ->
-    {Nested, State1} = nest_list_comprehension(State0, Expressions),
+    Var = success_var(Expressions),
+    ?QQ([
+        "case [_@Last || _@Init] of",
+        "    []      -> _@ErrorCase;",
+        "    [_@Var] -> _@Var",
+        "end"
+    ]);
+with_statement(_, undefined, match_pattern, Expressions, _, ErrorCases) ->
+    Nested = nest_list_comprehension(Expressions),
     Cases = lists:map(fun wrap_error/1, ErrorCases),
-    {Var, State2} = success_var(State1),
-    {
-        continue,
-        ?QQ([
-            "case _@Nested of",
-            "    _@_ -> _@_Cases;",
-            "    _@Var -> _@Var",
-            "end"
-        ]),
-        State2
-    };
+    Var = success_var(Expressions),
+    ?QQ([
+        "case _@Nested of",
+        "    _@_ -> _@_Cases;",
+        "    _@Var -> _@Var",
+        "end"
+    ]);
 with_statement(_, match, undefined, Expressions, SuccessCases, _) ->
     {Init, Last} = wrap_list_comprehension(Expressions),
     Cases = lists:map(fun wrap_in_list/1, SuccessCases),
@@ -135,42 +125,34 @@ with_statement(_, match, undefined, Expressions, SuccessCases, _) ->
         "    _@_ -> _@_Cases",
         "end"
     ]);
-with_statement(State, _, _, Expressions, SuccessCases, ErrorCases) ->
-    {Nested, NewState} = nest_list_comprehension(State, Expressions),
+with_statement(_, _, _, Expressions, SuccessCases, ErrorCases) ->
+    Nested = nest_list_comprehension(Expressions),
     Cases =
         lists:map(fun wrap_ok/1, SuccessCases) ++
             lists:map(fun wrap_error/1, ErrorCases),
-    {
-        continue,
-        ?QQ([
-            "case _@Nested of",
-            "    _@_ -> _@_Cases",
-            "end"
-        ]),
-        NewState
-    }.
+    ?QQ([
+        "case _@Nested of",
+        "    _@_ -> _@_Cases",
+        "end"
+    ]).
 
-success_var(State) ->
-    {Name, UpdatedState} = merlin_lib:add_new_variable(State, "__Success", "__"),
-    {erl_syntax:variable(Name), UpdatedState}.
+success_var([Form]) ->
+    merlin_lib:new_variable(Form, "__Success", "__").
 
-nest_list_comprehension(State, []) ->
-    {[], State};
-nest_list_comprehension(State, [Last]) ->
-    {[?QQ("{ok, _@Last}")], State};
-nest_list_comprehension(State, Expressions) ->
+nest_list_comprehension([]) ->
+    [];
+nest_list_comprehension([Last]) ->
+    [?QQ("{ok, _@Last}")];
+nest_list_comprehension(Expressions) ->
     {Init, Last} = split(Expressions),
-    {Names, NewState} = merlin_lib:add_new_variables(State, length(Init)),
-    ExpressionsWithVars = lists:zip(
-        Init,
-        lists:map(fun erl_syntax:variable/1, Names)
-    ),
+    Variables = merlin_lib:new_variables(Last, length(Init)),
+    ExpressionsWithVars = lists:zip(Init, Variables),
     Cases = lists:foldr(
         fun fold_case/2,
         [?QQ("{ok, _@Last}")],
         ExpressionsWithVars
     ),
-    {Cases, NewState}.
+    Cases.
 
 fold_case({Form, ErrorVar}, Inner) ->
     case ?QQ("[_ || _@Form]") of
