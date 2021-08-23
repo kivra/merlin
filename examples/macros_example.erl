@@ -31,7 +31,7 @@ simple_eval() ->
             end,
         case Elements of
             [] ->
-                {error, "empty list for `?oneof´ comparison"};
+                {error, "empty list for `?oneof` comparison"};
             [Single] ->
                 {warning, "only one element in `?oneof` comparison", Compare(Single)};
             _ ->
