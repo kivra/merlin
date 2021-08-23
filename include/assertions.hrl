@@ -83,8 +83,8 @@ end).
                         {module, ?MODULE},
                         {line, ?LINE},
                         {expression, "erl_syntax:type(" ??Expr ")"},
-                        {expected, true},
-                        {value, false}
+                        {expected, form},
+                        {value, Node__}
                     ]},
                     __Stacktrace__
                 )
