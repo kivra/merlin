@@ -9,4 +9,6 @@
 
 -define(in(High, Low), in(High..Low)).
 
+-include("merlin_oneof.hrl").
+
 -endif.

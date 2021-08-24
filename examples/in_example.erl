@@ -9,3 +9,6 @@ simple(MaybeGreeting) when MaybeGreeting ?in [hello, "hello", <<"hello">>] ->
 
 range(Map, N) when N ?in(map_get(key, Map) .. 10) ->
     ok.
+
+one_of(N, M) when N =:= ?oneof(1, 2, 3) andalso M == ?oneof(3.14, 2.7) ->
+    ok.

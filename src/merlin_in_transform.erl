@@ -15,17 +15,10 @@ transformer(enter, ?QQ("_@Needle and merlin_in_transform:'IN'() and []"), _File)
     {error, "empty list for `?in´ comparison"};
 transformer(
     enter,
-    ?QQ("_@Needle and merlin_in_transform:'IN'() and [_@Single]"),
-    _File
-) ->
-    {warning, "only one element in `?in` comparison", compare(Needle, Single)};
-transformer(
-    enter,
     ?QQ("_@Needle and merlin_in_transform:'IN'() and [_@@Elements]") = Form,
     _File
 ) ->
-    [First | Rest] = [compare(Needle, Term) || Term <- Elements],
-    erl_syntax:copy_pos(Form, lists:foldl(fun join/2, First, Rest));
+    combine(Form, Needle, in, Elements, fun compare/2);
 transformer(
     enter,
     ?QQ("_@Needle and merlin_in_transform:'IN'(_@ExpressionAST)") = Form,
@@ -52,16 +45,47 @@ transformer(
         {Low, '...', High} ->
             ?QQ("_@Low =< _@Needle andalso _@Needle =< _@High")
     end;
+transformer(
+    enter,
+    ?QQ("_@Needle =:= merlin_in_transform:'ONE OF'(_@@Args)") = Form,
+    _File
+) ->
+    combine(Form, Needle, oneof, Args, fun '=:='/2);
+transformer(
+    enter,
+    ?QQ("_@Needle == merlin_in_transform:'ONE OF'(_@@Args)") = Form,
+    _File
+) ->
+    combine(Form, Needle, oneof, Args, fun '=='/2);
 transformer(_, _, _) ->
     continue.
 
-join(Left, Right) ->
+combine(_Form, _Needle, Macro, [], Fun) when is_function(Fun, 2) ->
+    Message = io_lib:format("no elements in `?~s` comparison", [Macro]),
+    {error, Message};
+combine(Form, Needle, Macro, [Single], Fun) when is_function(Fun, 2) ->
+    Message = io_lib:format("only one element for `?~s` comparison", [Macro]),
+    {warning, Message, erl_syntax:copy_attrs(Form, Fun(Needle, Single))};
+combine(Form, Needle, _Macro, Elements, Fun) when
+    length(Elements) > 1 andalso is_function(Fun, 2)
+->
+    Expressions = [Fun(Needle, Term) || Term <- Elements],
+    {Init, Last} = lists:split(length(Expressions) - 1, Expressions),
+    erl_syntax:copy_attrs(Form, lists:foldr(fun 'orelse'/2, Last, Init)).
+
+'orelse'(Left, Right) ->
     ?QQ("_@Left orelse _@Right").
+
+'=:='(Left, Right) ->
+    erl_syntax:copy_attrs(Left, ?QQ("_@Left =:= _@Right")).
+
+'=='(Left, Right) ->
+    erl_syntax:copy_attrs(Left, ?QQ("_@Left == _@Right")).
 
 compare(Needle, Term) ->
     case erl_syntax:type(Term) of
-        float -> ?QQ("_@Needle == _@Term");
-        _ -> ?QQ("_@Needle =:= _@Term")
+        float -> '=='(Needle, Term);
+        _ -> '=:='(Needle, Term)
     end.
 
 is_range_op({'..', _}) -> true;
