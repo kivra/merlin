@@ -109,7 +109,8 @@
 %% 3, When you `exit' a subtree
 %%
 %% It's recommended to have a match-all clause to future proof your code.
--spec transform([ast()], transformer(Extra), Extra) -> {parse_transform_return(), Extra}.
+-spec transform([ast()], transformer(Extra), Extra) ->
+    {parse_transform_return(), Extra}.
 transform(Forms, Transformer, Extra) when is_function(Transformer, 3) ->
     InternalState = #state{
         file = merlin_lib:file(Forms),
