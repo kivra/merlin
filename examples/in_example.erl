@@ -3,6 +3,7 @@
 -compile([export_all, nowarn_export_all]).
 
 -include("merlin_in.hrl").
+-include("merlin_oneof.hrl").
 
 simple(MaybeGreeting) when MaybeGreeting ?in [hello, "hello", <<"hello">>] ->
     ok.
