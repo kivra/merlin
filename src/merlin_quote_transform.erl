@@ -117,9 +117,10 @@
     parse_transform/2
 ]).
 
-%% Used internally by the resulting code
+%% Used internally by the resulting code or macros
 -export([
-    switch/2
+    switch/2,
+    set_location/2
 ]).
 
 -include_lib("syntax_tools/include/merl.hrl").
@@ -189,6 +190,23 @@ switch_internal(Arguments, [Clause | Clauses]) ->
     case apply(Clause, Arguments) of
         {ok, _} = Ok -> Ok;
         continue -> switch(Arguments, Clauses)
+    end.
+
+%% Sets the given location on the given target.
+%% The `Location' can be either an {@link erl_anno:anno/0} or
+%% {@link merlin:ast/0, form} from which the information is copied. In this
+%% case all user annotaions are copied, not just the {@link erl_anno:anno/0}
+%% annotations.
+%%
+%% @see erl_anno:anno/0
+%% @see erl_syntax:copy_attrs/2
+set_location(Location, Target) ->
+    case erl_anno:is_anno(Location) of
+        true ->
+            erl_syntax:set_pos(Target, Location);
+        false ->
+            ?assertIsForm(Location),
+            erl_syntax:copy_attrs(Location, Target)
     end.
 
 %% @private
