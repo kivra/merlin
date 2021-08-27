@@ -160,6 +160,9 @@ parse_transform(Forms, Options) ->
 %% @private
 %% @doc Runtime function that correctly emulates a `case' statement.
 %% It's to be considered an implementation detail even though it is exported.
+%% In the event of an exception, it removes all stack frames from this module,
+%% thus making this almost transparent to the user. The only gotcha is that
+%% this reduces the stacktrace a bit, but should not be an issue in practice.
 -spec switch(Arguments, Clauses) -> Value when
     Arguments :: [term()],
     Clauses :: [fun((Arguments) -> {ok, Value} | continue)].
@@ -168,6 +171,21 @@ switch(Arguments, []) when is_list(Arguments) ->
 switch(Arguments, [Clause | Clauses]) when
     is_list(Arguments) andalso is_function(Clause, length(Arguments))
 ->
+    try
+        switch_internal(Arguments, [Clause | Clauses])
+    catch
+        Class:Reason:Stacktrace0 ->
+            Stacktrace1 = [
+                Frame
+             || {Module, _, _, _} = Frame <- Stacktrace0, Module =/= ?MODULE
+            ],
+            erlang:raise(Class, Reason, Stacktrace1)
+    end.
+
+%% @private
+%% @doc By dividing {@link switch/2} into two functions like this we get to
+%% keep tail recursion optimisation even though we use a `try'/`catch'.
+switch_internal(Arguments, [Clause | Clauses]) ->
     case apply(Clause, Arguments) of
         {ok, _} = Ok -> Ok;
         continue -> switch(Arguments, Clauses)
