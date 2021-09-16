@@ -514,7 +514,8 @@ clause_to_fun(Clause0) ->
                 "end"
             ]),
             erl_syntax:fun_expr([
-                update_clause(Clause4, copy, none, GuardedCase)
+                update_clause(Clause4, copy, none, GuardedCase),
+                update_clause(Clause2, underscore, ?Q("continue"))
             ])
     end.
 
@@ -1071,6 +1072,58 @@ transform_simple_test_() ->
                                 {current_stacktrace, [__Var3__ | __Var1__]} =
                                     erlang:process_info(self(), current_stacktrace),
                                 __Var2__ = erlang:setelement(4, __Var3__, [__Arg1]),
+                                erlang:raise(error, function_clause, [__Var2__ | __Var1__])
+                        end
+                )
+            ),
+            ?_transformTest(
+                "No merl pattern with extended guard",
+                ?QUOTE(
+                    func(enter, {'MERLIN QUOTE MARKER', "example.erl", 10, "_@Pattern = _@Expr"}, _) ->
+                        match;
+                    func(enter, Clause, _) when erl_syntax:type(Clause) =:= clause ->
+                        clause
+                ),
+                ?QUOTE(
+                    func(__Arg3, __Arg2, __Arg1) ->
+                        case merlin_quote_transform:switch(
+                            [__Arg3, __Arg2, __Arg1],
+                            [
+                                fun (enter, __Var4__, _) ->
+                                        case __Var4__ of
+                                            merl:quote(10, "_@Pattern = _@Expr") ->
+                                                {ok, match};
+                                            _ ->
+                                                continue
+                                        end;
+                                    (_, _, _) ->
+                                        continue
+                                end,
+                                fun (enter, Clause, _) ->
+                                        case
+                                            try
+                                                erl_syntax:type(Clause) =:= clause
+                                            catch
+                                                _:_ ->
+                                                    false
+                                            end
+                                        of
+                                            true ->
+                                                {ok, clause};
+                                            _ ->
+                                                continue
+                                        end;
+                                    (_, _, _) ->
+                                        continue
+                                end
+                            ]
+                        ) of
+                            {ok, __ValueVar1} ->
+                                __ValueVar1;
+                            _ ->
+                                {current_stacktrace, [__Var3__ | __Var1__]} =
+                                    erlang:process_info(self(), current_stacktrace),
+                                __Var2__ = erlang:setelement(4, __Var3__, [__Arg3, __Arg2, __Arg1]),
                                 erlang:raise(error, function_clause, [__Var2__ | __Var1__])
                         end
                 )
