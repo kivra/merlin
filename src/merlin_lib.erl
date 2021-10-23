@@ -119,7 +119,7 @@ test_variable_formatter(Prefix0, Suffix0) ->
 -type binding_type() :: env | bound | free.
 
 %% A bit dirty to know about the internal structure like this, but
-%% {@link erl_syntax:syntaxTree/0} also includes the vanilla ASt and dialyser
+%% {@link erl_syntax:syntaxTree/0} also includes the vanilla AST and dialyser
 %% doesn't always approve of that.
 -type erl_syntax_ast() ::
     {tree, any(), any(), any()}
@@ -237,7 +237,7 @@ set_annotation(Form, Annotation, Value) ->
     update_annotations(Form, #{Annotation => Value}).
 
 %% @doc Returns the given form with the given annotations merged in.
-%% It seperates {@link erl_anno} annotations from user once, which means if
+%% It separates {@link erl_anno} annotations from user once, which means if
 %% you set `line' or `file', you update the position/location of the form,
 %% else you are setting an erl_syntax user annotation.
 %%
@@ -516,7 +516,7 @@ annotate_bindings(Form) ->
     erl_syntax_lib:annotate_bindings(Form, Env).
 
 %% @doc Get the type of the given binding in the given form.
-%% Prefering bound over env over free.
+%% Preferring bound over env over free.
 %%
 %% @see erl_syntax_lib:annotate_bindings/2
 -spec get_binding_type(bindings_or_form(), atom()) -> bound | env | free | unknown.
@@ -549,7 +549,7 @@ get_bindings(#{bound := Bound, env := Env, free := Free}) ->
 get_bindings(Form) when is_tuple(Form) ->
     get_bindings(get_annotations(Form)).
 
-%% @doc Returns the bindings assosicated of the given `Type'
+%% @doc Returns the bindings associated of the given `Type'
 -spec get_bindings_by_type(bindings_or_form(), binding_type()) ->
     ordsets:ordset(atom()).
 get_bindings_by_type(Bindings, Type) when
@@ -566,7 +566,7 @@ get_bindings_by_type(BindingsOrForm, Type) when ?is_binding_type(Type) ->
 
 %% @doc Get all bindings associated with the given `Form'.
 %%
-%% Returns a map from binding name to kind, prefering bound over env over
+%% Returns a map from binding name to kind, preferring bound over env over
 %% free.
 %%
 %% @see erl_syntax_lib:annotate_bindings/2

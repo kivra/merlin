@@ -137,7 +137,7 @@ transform(Forms, Transformer, Extra) when is_function(Transformer, 3) ->
         catch
             throw:Reason:Stacktrace ->
                 %% compile:foldl_transform/3 uses a `catch F(...)` when calling parse
-                %% transforms. Unfortuntely this means `throw`n errors turns into
+                %% transforms. Unfortunately this means `throw`n errors turns into
                 %% normal values.
                 ?log_exception(throw, Reason, Stacktrace),
                 erlang:raise(error, Reason, Stacktrace);
@@ -264,7 +264,7 @@ mapfold_subtrees(Fun, State0, Tree0) ->
     end.
 
 %% @private
-%% @doc Calls the user transformer and heavely normalizes its return value.
+%% @doc Calls the user transformer and heavily normalizes its return value.
 %%
 %% The transformer may return many different tuples prefixed with 5
 %% different actions. This reduces that to just 2 actions and folds the
