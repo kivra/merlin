@@ -15,7 +15,8 @@
 ]).
 
 -export([
-    format_error/1
+    format_error/1,
+    format_error/2
 ]).
 
 -export([
@@ -27,7 +28,9 @@
     get_annotation/2,
     get_annotation/3,
     get_annotations/1,
+    remove_annotation/2,
     set_annotation/3,
+    set_annotations/2,
     update_annotations/2
 ]).
 
@@ -102,7 +105,7 @@ test_variable_formatter(Prefix0, Suffix0) ->
     (Type =:= bound orelse Type =:= env orelse Type =:= free)
 ).
 
--define(ERL_ANNO_KEYS, [file, generated, location, record, text]).
+-define(ERL_ANNO_KEYS, [line, column, file, generated, record, text]).
 
 -type variable() :: atom() | merlin:ast().
 
@@ -125,6 +128,31 @@ test_variable_formatter(Prefix0, Suffix0) ->
 -type erl_syntax_ast() ::
     {tree, any(), any(), any()}
     | {wrapper, any(), any(), any()}.
+
+%% Copied from erl_syntax
+-type erl_parse() ::
+    erl_parse:abstract_clause()
+    | erl_parse:abstract_expr()
+    | erl_parse:abstract_form()
+    | erl_parse:abstract_type()
+    | erl_parse:form_info()
+    | erl_parse:af_binelement(term())
+    | erl_parse:af_generator()
+    | erl_parse:af_remote_function().
+
+-type erl_annotation() ::
+    {line, erl_anno:line()}
+    | {column, erl_anno:column()}
+    | {file, file:filename_all()}
+    | {generated, boolean()}
+    | {location, erl_anno:location()}
+    | {record, boolean()}
+    | {text, string()}.
+
+-type erl_annotations() :: [erl_annotation()].
+
+-type erl_annotation_key() ::
+    line | column | file | generated | location | record | text.
 
 %% @doc Returns the filename for the first `-file' attribute in `Forms', or
 %% `""' if not found.
@@ -183,6 +211,11 @@ format_error(Message0) ->
         nomatch -> Message1
     end.
 
+format_error(badarg, [{?MODULE, remove_annotation, [_Form, line], _Location} | _]) ->
+    #{2 => "can't remove the line annotation"};
+format_error(_, _) ->
+    #{}.
+
 %% @doc Returns a
 %% <a href="https://erlang.org/doc/man/erl_parse.html#errorinfo">
 %% error info</a> with the given reason and location taken from the second
@@ -238,8 +271,14 @@ find_source(Module) when is_atom(Module) ->
 %% @doc Returns the annotation for the given form,
 %% or raises `{badkey, Annotation}' if not found.
 get_annotation(Form, Annotation) ->
-    Annotations = get_annotations(Form),
-    maps:get(Annotation, Annotations).
+    case is_erl_anno(Annotation) of
+        true ->
+            Anno = erl_syntax:get_pos(Form),
+            get_anno(Annotation, Anno);
+        false ->
+            Annotations = get_annotations(Form),
+            maps:get(Annotation, Annotations)
+    end.
 
 %% @doc Returns the annotation for the given form,
 %% or Default if not found.
@@ -254,8 +293,79 @@ get_annotations(Form) ->
 
 %% @doc Returns the given form with the given annotation set to the given
 %% value.
+%% When given an erl_anno annotation and erl_parse form, it returns a erl_parse
+%% form, otherwise an erl_syntax form.
 set_annotation(Form, Annotation, Value) ->
-    update_annotations(Form, #{Annotation => Value}).
+    Tuple = {Annotation, Value},
+    case is_erl_anno(Annotation) of
+        true ->
+            Anno0 = erl_syntax:get_pos(Form),
+            Anno1 = set_anno(Tuple, Anno0),
+            set_pos(Form, Anno1);
+        false ->
+            ErlSyntax0 = erl_syntax:get_ann(Form),
+            ErlSyntax1 = lists:keystore(Annotation, 1, ErlSyntax0, Tuple),
+            erl_syntax:set_ann(Form, ErlSyntax1)
+    end.
+
+%% @private
+set_pos(Form, Anno) ->
+    case is_erl_syntax(Form) of
+        true ->
+            erl_syntax:set_pos(Form, Anno);
+        false ->
+            setelement(2, Form, Anno)
+    end.
+
+%% @private
+-spec is_erl_syntax
+    (erl_syntax_ast()) -> true;
+    (erl_parse()) -> false.
+is_erl_syntax(Form) when is_tuple(Form) ->
+    Type = element(1, Form),
+    Type =:= tree orelse Type =:= wrapper.
+
+%% @doc Returns the given form with the given annotations.
+%%
+%% These may be {@link erl_parse} annotations, user annotations, or a mix of
+%% both. The given annotations overwrite any already present. To preseve
+%% existing ones use {@link update_annotations/2} instead.
+set_annotations(Form0, Annotations) when is_map(Annotations) ->
+    {ErlAnnotations, ErlSyntax} = lists:partition(
+        fun is_erl_anno/1,
+        maps:to_list(Annotations)
+    ),
+    Form1 = set_erl_anno(Form0, ErlAnnotations),
+    case ErlSyntax of
+        [] -> Form1;
+        _ -> erl_syntax:set_ann(Form1, ErlSyntax)
+    end.
+
+%% @doc Returns the given form without the given annotation.
+%%
+%% You may not remove the `line', as it must always be present.
+%% You may remove annotations that are not present, if which case the original
+%% form is returned.
+remove_annotation(Form, line) ->
+    error(badarg, [Form, line], [{error_info, #{}}]);
+remove_annotation(Form, Annotation) ->
+    case is_erl_anno(Annotation) of
+        true ->
+            ErlAnnotations = erl_syntax:get_pos(Form),
+            case get_anno(ErlAnnotations, Annotation) of
+                undefined ->
+                    %% The annotation to remove is already missing
+                    Form;
+                _ ->
+                    %% There's no remove annotation in erl_anno,
+                    %% instead we set all _other_ annotations
+                    set_erl_anno(Form, ErlAnnotations)
+            end;
+        false ->
+            ErlSyntax0 = erl_syntax:get_ann(Form),
+            ErlSyntax1 = lists:keydelete(Annotation, 1, ErlSyntax0),
+            erl_syntax:set_ann(Form, ErlSyntax1)
+    end.
 
 %% @doc Returns the given form with the given annotations merged in.
 %% It separates {@link erl_anno} annotations from user once, which means if
@@ -266,14 +376,13 @@ set_annotation(Form, Annotation, Value) ->
 %% @see erl_syntax:get_pos/1
 %% @see erl_syntax:get_ann/1
 update_annotations(Form0, NewAnnotations) when is_map(NewAnnotations) ->
-    {ErlAnno, ErlSyntax} = get_annotations_internal(Form0),
-    {NewErlAnno, NewErlSyntax} = lists:partition(
+    {ErlAnnotations, ErlSyntax} = get_annotations_internal(Form0),
+    {NewErlAnnotations, NewErlSyntax} = lists:partition(
         fun is_erl_anno/1,
         maps:to_list(NewAnnotations)
     ),
-    UpdatedErlAnno = lists:foldl(fun set_erl_anno/2, ErlAnno, NewErlAnno),
     UpdatedErlSyntax = maps:merge(ErlSyntax, maps:from_list(NewErlSyntax)),
-    Form1 = erl_syntax:set_pos(Form0, UpdatedErlAnno),
+    Form1 = set_erl_anno(Form0, ErlAnnotations ++ NewErlAnnotations),
     Form2 = erl_syntax:set_ann(Form1, maps:to_list(UpdatedErlSyntax)),
     Form2.
 
@@ -283,9 +392,9 @@ get_annotations_internal(Form) ->
     ?assertIsForm(Form),
     Anno = erl_syntax:get_pos(Form),
     ErlAnno = [
-        {Name, get_erl_anno(Name, Anno)}
+        {Name, get_anno(Name, Anno)}
      || Name <- ?ERL_ANNO_KEYS,
-        get_erl_anno(Name, Anno) =/= undefined
+        get_anno(Name, Anno) =/= undefined
     ],
     ErlSyntax = maps:from_list(erl_syntax:get_ann(Form)),
     ?assertEqual(
@@ -299,37 +408,55 @@ get_annotations_internal(Form) ->
     {ErlAnno, ErlSyntax}.
 
 %% @private
-is_erl_anno({file, _Value}) -> true;
-is_erl_anno({generated, _Value}) -> true;
-is_erl_anno({location, _Value}) -> true;
-is_erl_anno({record, _Value}) -> true;
-is_erl_anno({text, _Value}) -> true;
-is_erl_anno({_Key, _Value}) -> false.
+-spec is_erl_anno
+    (erl_annotation()) -> true;
+    (erl_annotation_key()) -> true;
+    (any()) -> false.
+is_erl_anno(line) -> true;
+is_erl_anno(column) -> true;
+is_erl_anno(file) -> true;
+is_erl_anno(generated) -> true;
+is_erl_anno(location) -> true;
+is_erl_anno(record) -> true;
+is_erl_anno(text) -> true;
+is_erl_anno({Key, _Value}) when is_atom(Key) -> is_erl_anno(Key);
+is_erl_anno(_) -> false.
 
 %% @private
-get_erl_anno(file, Anno) ->
-    erl_anno:file(Anno);
-get_erl_anno(generated, Anno) ->
-    erl_anno:generated(Anno) orelse undefined;
-get_erl_anno(location, Anno) ->
-    erl_anno:location(Anno);
-get_erl_anno(record, Anno) ->
-    erl_anno:record(Anno) orelse undefined;
-get_erl_anno(text, Anno) ->
-    erl_anno:text(Anno);
-get_erl_anno(_, _) ->
-    undefined.
+get_anno(line, Anno) -> erl_anno:line(Anno);
+get_anno(column, Anno) -> erl_anno:column(Anno);
+get_anno(file, Anno) -> erl_anno:file(Anno);
+get_anno(generated, Anno) -> erl_anno:generated(Anno) orelse undefined;
+get_anno(location, Anno) -> erl_anno:location(Anno);
+get_anno(record, Anno) -> erl_anno:record(Anno) orelse undefined;
+get_anno(text, Anno) -> erl_anno:text(Anno);
+get_anno(_, _) -> undefined.
 
 %% @private
-set_erl_anno({file, File}, Anno) ->
+-spec set_erl_anno(merlin:ast(), erl_annotations()) -> erl_syntax_ast().
+set_erl_anno(Form, []) ->
+    Form;
+set_erl_anno(Form, ErlAnnotations) ->
+    Anno0 = erl_anno:new(erl_anno:line(erl_syntax:get_pos(Form))),
+    Anno1 = lists:foldl(fun set_anno/2, Anno0, ErlAnnotations),
+    set_pos(Form, Anno1).
+
+%% @private
+-spec set_anno(erl_annotation(), erl_anno:anno()) -> erl_anno:anno().
+set_anno({line, Line}, Anno) when is_integer(Line) ->
+    erl_anno:set_line(Line, Anno);
+set_anno({column, Column}, Anno) when is_integer(Column) ->
+    Line = erl_anno:line(Anno),
+    erl_anno:set_location({Line, Column}, Anno);
+set_anno({file, File}, Anno) when is_list(File) ->
     erl_anno:set_file(File, Anno);
-set_erl_anno({generated, Generated}, Anno) ->
+set_anno({generated, Generated}, Anno) when is_boolean(Generated) ->
     erl_anno:set_generated(Generated, Anno);
-set_erl_anno({location, Location}, Anno) ->
+set_anno({location, Location}, Anno) ->
     erl_anno:set_location(Location, Anno);
-set_erl_anno({record, Record}, Anno) ->
+set_anno({record, Record}, Anno) when is_boolean(Record) ->
     erl_anno:set_record(Record, Anno);
-set_erl_anno({text, Text}, Anno) ->
+set_anno({text, Text}, Anno) when is_list(Text) ->
     erl_anno:set_text(Text, Anno).
 
 %% @doc Returns the argument to the first module attribute with the given
@@ -680,3 +807,82 @@ into_set(SetOrForm) when is_tuple(SetOrForm) ->
             ?assertIsForm(SetOrForm),
             sets:from_list(get_bindings(SetOrForm))
     end.
+
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+
+get_annotation_test_() ->
+    LineAnno = erl_anno:new(7),
+    FileAnno = erl_anno:set_file(?FILE, LineAnno),
+    Form = {var, LineAnno, 'Variable'},
+    FormWithFile = {var, FileAnno, 'Variable'},
+    FormWithBound = erl_syntax:add_ann({bound, ['Foo']}, Form),
+    maps:to_list(#{
+        "get line from form with simplest anno" => fun() ->
+            ?assertEqual(7, get_annotation(Form, line))
+        end,
+        "get line from form with complex anno" => fun() ->
+            ?assertEqual(7, get_annotation(FormWithFile, line))
+        end,
+        "get file from form without file and default must return undefined" => fun() ->
+            ?assertEqual(undefined, get_annotation(Form, file))
+        end,
+        "get file from form without file must return the given default" => fun() ->
+            ?assertEqual(123, get_annotation(Form, file, 123))
+        end,
+        "get file from form with file" => fun() ->
+            ?assertEqual(?FILE, get_annotation(FormWithFile, file))
+        end,
+        "get bound from form with bound user annotation" => fun() ->
+            ?assertEqual(['Foo'], get_annotation(FormWithBound, bound))
+        end
+    }).
+
+get_annotations_test() ->
+    LineAnno = erl_anno:new(7),
+    FileAnno = erl_anno:set_file(?FILE, LineAnno),
+    Form0 = {var, FileAnno, 'Variable'},
+    Form1 = erl_syntax:add_ann({bound, ['Foo']}, Form0),
+    ExpectedAnnotations = #{
+        line => 7,
+        file => ?FILE,
+        bound => ['Foo']
+    },
+    ?assertEqual(ExpectedAnnotations, get_annotations(Form1)).
+
+set_annotation_test_() ->
+    LineAnno = erl_anno:new(7),
+    FileAnno = erl_anno:set_file(?FILE, LineAnno),
+    Form = {var, LineAnno, 'Variable'},
+    FormWithFile = {var, FileAnno, 'Variable'},
+    FormWithBound = erl_syntax:add_ann({bound, ['Foo']}, Form),
+    FormWithBoth = erl_syntax:add_ann({bound, ['Foo']}, FormWithFile),
+    maps:to_list(#{
+        "set user annotation" => fun() ->
+            ?assertEqual(FormWithBound, set_annotation(Form, bound, ['Foo']))
+        end,
+        "setting an erl_anno annotation does not covert the form to erl_syntax AST" => fun() ->
+            ?assertEqual(FormWithFile, set_annotation(Form, file, ?FILE))
+        end,
+        "set erl_anno on erl_syntax AST" => fun() ->
+            ActualForm = set_annotation(FormWithBound, file, ?FILE),
+            ?assertEqual(get_pos(FormWithBoth), get_pos(ActualForm)),
+            ?assertEqual(get_ann(FormWithBoth), get_ann(ActualForm))
+        end,
+        "set user annotation on complex erl_anno" => fun() ->
+            ActualForm = set_annotation(FormWithFile, bound, ['Foo']),
+            ?assertEqual(get_pos(FormWithBoth), get_pos(ActualForm)),
+            ?assertEqual(get_ann(FormWithBoth), get_ann(ActualForm))
+        end
+    }).
+
+get_pos(Form) ->
+    case erl_syntax:get_pos(Form) of
+        Anno when is_list(Anno) -> lists:sort(Anno);
+        Anno -> Anno
+    end.
+
+get_ann(Form) ->
+    lists:sort(erl_syntax:get_ann(Form)).
+
+-endif.
