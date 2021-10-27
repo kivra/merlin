@@ -112,28 +112,21 @@
 -spec transform([ast()], transformer(Extra), Extra) ->
     {parse_transform_return(), Extra}.
 transform(Forms, Transformer, Extra) when is_function(Transformer, 3) ->
-    InternalState = #state{
+    InternalState0 = #state{
         file = merlin_lib:file(Forms),
         module = merlin_lib:module(Forms),
         transformer = Transformer,
         extra = Extra
     },
-    logger:update_process_metadata(#{
-        target => #{
-            file => InternalState#state.file,
-            line => none,
-            module => InternalState#state.module,
-            transformer => merlin_internal:fun_to_mfa(Transformer)
-        }
-    }),
+    set_logger_target(InternalState0),
     ?notice(
         "Transforming using ~s:~s/~p",
         tuple_to_list(merlin_internal:fun_to_mfa(Transformer))
     ),
     ?show(Forms),
-    {TransformedTree, FinalState} =
+    {Forms1, InternalState1} =
         try
-            transform_internal(Forms, InternalState)
+            transform_internal(Forms, InternalState0)
         catch
             throw:Reason:Stacktrace ->
                 %% compile:foldl_transform/3 uses a `catch F(...)` when calling parse
@@ -145,10 +138,26 @@ transform(Forms, Transformer, Extra) when is_function(Transformer, 3) ->
                 ?log_exception(Class, Reason, Stacktrace),
                 erlang:raise(Class, Reason, Stacktrace)
         end,
-    ?info("Final state ~tp", [FinalState#state.extra]),
-    FinalTree = finalize(TransformedTree, FinalState),
-    ?show(FinalTree),
-    {FinalTree, FinalState#state.extra}.
+    ?info("Final state ~tp", [InternalState1#state.extra]),
+    Forms2 = finalize(Forms1, InternalState1),
+    ?show(Forms2),
+    {Forms2, InternalState1#state.extra}.
+
+%% @private
+%% @doc Returns the result of {@link transform_internal/2} as expected by
+%% {@link erl_lint}.
+%%
+%% However, the returned forms are in {@link erl_syntax} format and must be
+%% {@link revert/1. reverted} before returning from a parse_transform. You can
+%% use {@link return/1} for that.
+%%
+%% This matches the `case' in {@link compile:foldl_transform/3}.
+finalize(Tree, #state{errors = [], warnings = []}) ->
+    Tree;
+finalize(Tree, #state{errors = [], warnings = Warnings}) ->
+    {warning, Tree, group_by_file(Warnings)};
+finalize(_Tree, #state{errors = Errors, warnings = Warnings}) ->
+    {error, group_by_file(Errors), group_by_file(Warnings)}.
 
 %% @private
 -spec transform_internal(FormOrForms, #state{}) -> {ast(), #state{}} when
@@ -285,44 +294,74 @@ call_transformer(
 ) ->
     set_logger_target(line, erl_syntax:get_pos(Node0)),
     set_logger_target(state, Extra0),
-    {Action, Node1, Extra1, Reasons} = expand_callback_return(
+    {Action, NodeOrNodes, Extra1, Reasons} = expand_callback_return(
         Transformer(Phase, Node0, Extra0),
         Node0,
         Extra0
     ),
-    First =
-        case Node1 of
-            [Head | _] -> Head;
-            _ -> Node1
-        end,
-    set_logger_target(line, erl_syntax:get_pos(First)),
-    set_logger_target(state, Extra1),
-    ?info(
-        "~s ~s -> ~s ~s",
-        [Phase, erl_syntax:type(Node0), Action, erl_syntax:type(First)]
-    ),
-    ?debug("Input ~tp", [Extra0]),
-    ?show("Input", Node0),
-    ?debug("Output ~tp", [Extra1]),
-    ?show("Output", Node1),
+    log_call_transformer(Phase, Node0, Extra0, Action, NodeOrNodes, Extra1),
     State1 = State0#state{extra = Extra1},
-    {Errors, Warnings} = format_markers(Reasons, First, State1),
+    {FirstNode, {ExtraErrors, ExtraWarnings}} =
+        case NodeOrNodes of
+            [Head | _] ->
+                ExtraReasons = lists:filter(fun is_error_or_warning/1, NodeOrNodes),
+                {Head, format_markers(ExtraReasons, Head, State1)};
+            _ ->
+                {NodeOrNodes, {[], []}}
+        end,
+    {Errors, Warnings} = format_markers(Reasons, FirstNode, State1),
     State2 = State1#state{
-        errors = Errors ++ ExistingErrors,
-        warnings = Warnings ++ ExistingWarnings
+        errors = Errors ++ ExtraErrors ++ ExistingErrors,
+        warnings = Warnings ++ ExtraWarnings ++ ExistingWarnings
     },
     case Action of
-        _ when length(Errors) > 0 ->
-            {return, Node1, State2};
+        _ when length(Errors) + length(ExtraErrors) > 0 ->
+            {return, NodeOrNodes, State2};
         exceptions ->
-            {continue, Node1, State2};
+            {continue, NodeOrNodes, State2};
         delete ->
             {return, [], State2};
         continue ->
-            {continue, Node1, State2};
+            {continue, NodeOrNodes, State2};
         return ->
-            {return, Node1, State2}
+            {return, NodeOrNodes, State2}
     end.
+
+is_error_or_warning({error, _}) -> true;
+is_error_or_warning({warning, _}) -> true;
+is_error_or_warning(_) -> false.
+
+log_call_transformer(Phase, NodeIn, ExtraIn, Action, NodeOrNodes, ExtraOut) ->
+    NodeOut =
+        case NodeOrNodes of
+            [Head | _] -> Head;
+            _ -> NodeOrNodes
+        end,
+    set_logger_target(line, erl_syntax:get_pos(NodeOut)),
+    set_logger_target(state, ExtraOut),
+    ?info(
+        if
+            is_list(NodeOrNodes) -> "~s ~s -> ~s [~s, ...]";
+            ?else -> "~s ~s -> ~s ~s"
+        end,
+        [Phase, erl_syntax:type(NodeIn), Action, erl_syntax:type(NodeOut)]
+    ),
+    ?debug(
+        lists:flatten(
+            lists:join($\n, [
+                "NodeIn = ~s",
+                "ExtraIn = ~tp",
+                "NodeOrNodes = ~s",
+                "ExtraOut = ~tp"
+            ])
+        ),
+        [
+            merlin_internal:format_forms(NodeIn),
+            ExtraIn,
+            merlin_internal:format_forms(NodeOrNodes),
+            ExtraOut
+        ]
+    ).
 
 %% @private
 %% @doc Normalizes the return value from the user transformar into a
@@ -330,7 +369,7 @@ call_transformer(
 %%
 %% This makes the {@link call_transformer/3} much simpler to write.
 -spec expand_callback_return(Return, ast(), Extra) ->
-    {action(), AST, Extra, Reasons}
+    {action(), AST, Extra, Reasons0}
 when
     Return ::
         Action
@@ -340,10 +379,10 @@ when
         | {error, Reason, Extra}
         | {warning, Reason, AST}
         | {warning, Reason, AST, Extra}
-        | {exceptions, Reasons}
-        | {exceptions, Reasons, AST}
-        | {exceptions, Reasons, AST, Extra}
-        | {action(), AST, Extra, Reasons}
+        | {exceptions, Reasons0}
+        | {exceptions, Reasons0, AST}
+        | {exceptions, Reasons0, AST, Extra}
+        | {action(), AST, Extra, Reasons0}
         | {parse_transform, parse_transform_return()}
         | {AST, Extra}
         | AST,
@@ -351,7 +390,7 @@ when
     AST :: ast() | [ast()],
     Extra :: term(),
     Reason :: term(),
-    Reasons :: [{error | warning, Reason}].
+    Reasons0 :: [{error | warning, Reason}].
 expand_callback_return(Action, Node0, Extra0) when
     Action == continue orelse Action == delete orelse Action == return
 ->
@@ -414,23 +453,24 @@ expand_callback_return(Nodes0, _Node0, Extra0) when is_list(Nodes0) ->
     Nodes1 = erl_syntax:form_list(Nodes0),
     Nodes2 = erl_syntax:flatten_form_list(Nodes1),
     Nodes3 = erl_syntax:form_list_elements(Nodes2),
-    lists:foreach(fun assert_valid_node/1, Nodes3),
     {continue, Nodes3, Extra0, []};
 expand_callback_return(Node1, Node0, Extra0) ->
-    case assert_valid_node(Node1) of
+    case check_syntax(Node1) of
         form_list ->
             Nodes = erl_syntax:form_list_elements(Node1),
             expand_callback_return(Nodes, Node0, Extra0);
+        {error, _} = Error ->
+            {return, Node1, Extra0, [Error]};
         _ ->
             {continue, Node1, Extra0, []}
     end.
 
-assert_valid_node(Node) ->
+check_syntax(Node) ->
     try
         erl_syntax:type(Node)
     catch
         error:{badarg, _} ->
-            erlang:error({badsyntax, Node})
+            {error, "bad syntax"}
     end.
 
 %% @private
@@ -815,33 +855,6 @@ return(Tree) ->
     _ = merlin_internal:write_log_file(),
     revert(Tree).
 
-%% @private
-%% @doc Returns an {@link erl_lint} compatible forms, with errors and
-%% warnings as appropriate.
-%%
-%% This matches the `case' in {@link compile:foldl_transform/3}.
-finalize(Tree, #state{errors = [], warnings = []} = State) ->
-    expand_form_lists(Tree, State);
-finalize(Tree0, #state{errors = [], warnings = Warnings} = State0) ->
-    % Clear the warnings to force a traversal
-    State1 = State0#state{warnings = []},
-    Tree1 = expand_form_lists(Tree0, State1),
-    {warning, Tree1, group_by_file(Warnings)};
-finalize(_Tree, #state{errors = Errors, warnings = Warnings}) ->
-    {error, group_by_file(Errors), group_by_file(Warnings)}.
-
-%% @private
-%% We need to expand any {@link erl_syntax:form_list/1}.
-%% This is already handled in transform_internal, but only on the way down.
-%% We can use the identity transform to traverse it one last time.
-expand_form_lists(Tree0, State0) ->
-    State1 = State0#state{transformer = fun identity_transformer/3},
-    {Tree1, _} = transform_internal(Tree0, State1),
-    Tree1.
-
-%% @private
-identity_transformer(_, _, _) -> continue.
-
 %% @doc Reverts back from Syntax Tools format to Erlang forms.
 %%
 %% Accepts a list of forms, or a single form.
@@ -859,10 +872,21 @@ revert(Form) ->
     end.
 
 get_logger_target() ->
+    Default = #{line => none},
     case logger:get_process_metadata() of
-        undefined -> #{};
-        Metadata -> maps:get(target, Metadata, #{})
+        undefined -> Default;
+        Metadata -> maps:get(target, Metadata, Default)
     end.
+
+set_logger_target(#state{file = File, module = Module, transformer = Transformer}) ->
+    MFA = merlin_internal:fun_to_mfa(Transformer),
+    logger:update_process_metadata(#{
+        target => maps:merge(get_logger_target(), #{
+            file => File,
+            module => Module,
+            transformer => MFA
+        })
+    }).
 
 set_logger_target(Key, Value) ->
     logger:update_process_metadata(#{
