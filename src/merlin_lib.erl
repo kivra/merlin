@@ -251,15 +251,16 @@ keyfind(List, Key, Default) ->
 %% @doc Returns the path to the source for the given module, or `undefined' if
 %% it can't be found.
 find_source(Module) when is_atom(Module) ->
-    MaybeSource = case code:get_object_code(Module) of
-        {Module, _Beam, Beamfile} ->
-            case filelib:find_source(Beamfile) of
-                {ok, FoundSource} -> FoundSource;
-                {error, not_found} -> undefined
-            end;
-        error ->
-            undefined
-    end,
+    MaybeSource =
+        case code:get_object_code(Module) of
+            {Module, _Beam, Beamfile} ->
+                case filelib:find_source(Beamfile) of
+                    {ok, FoundSource} -> FoundSource;
+                    {error, not_found} -> undefined
+                end;
+            error ->
+                undefined
+        end,
     case MaybeSource of
         undefined ->
             CompileOptions = Module:info(compile),

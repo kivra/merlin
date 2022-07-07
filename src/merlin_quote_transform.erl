@@ -132,8 +132,10 @@
         format,
         tuple_to_list(
             merlin_internal:format_forms(
-                {"Case with " ??Clauses " = ",
-                    erl_syntax:case_expr({var, ?LINE, '_'}, Clauses)}
+                {
+                    "Case with " ??Clauses " = ",
+                    erl_syntax:case_expr({var, ?LINE, '_'}, Clauses)
+                }
             )
         )
     ),
@@ -146,8 +148,10 @@ end).
         format,
         tuple_to_list(
             merlin_internal:format_forms(
-                {"Case with " ??Argument " of " ??Clauses " = ",
-                    erl_syntax:case_expr(Argument, Clauses)}
+                {
+                    "Case with " ??Argument " of " ??Clauses " = ",
+                    erl_syntax:case_expr(Argument, Clauses)
+                }
             )
         )
     ),
