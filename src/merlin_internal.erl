@@ -6,6 +6,7 @@
 
 -export([
     export_all/1,
+    eunit/1,
     format_forms/1,
     format_merl_guard/2,
     format_stack/1,
@@ -326,3 +327,9 @@ safe_value(Node) when is_tuple(Node) ->
     merlin_lib:value(Node);
 safe_value(Value) ->
     Value.
+
+eunit(Tests) ->
+    eunit:test([
+        {timeout, 60 * 60, Test}
+     || Test <- Tests
+    ]).
