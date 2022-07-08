@@ -13,29 +13,30 @@
 %% It also reverts both the {@link merl:tree/1. expected} and
 %% {@link merlin_revert/1. actual} syntax trees to make it easier to compare.
 -define(assertMerlMatch(Guard, Expr), begin
-    ((fun() ->
-        __Value__ = Expr,
-        case __Value__ of
+    ((fun(X__Value) ->
+        case X__Value of
             Guard ->
                 ok;
             _ ->
-                __GuardSource__ = merlin_internal:format_merl_guard(?LINE, ??Guard),
+                X__GuardSource = merlin_internal:format_merl_guard(?LINE, ??Guard),
                 io:format("Expected~n~s~nto match~n~s~n", [
-                    merlin_merl:format(__Value__),
-                    __GuardSource__
+                    merlin_merl:format(X__Value),
+                    X__GuardSource
                 ]),
                 erlang:error(
                     {assertMatch, [
                         {module, ?MODULE},
                         {line, ?LINE},
                         {expression, ??Expr},
-                        {pattern, __GuardSource__},
-                        {value, merlin:revert(__Value__)}
+                        {pattern, X__GuardSource},
+                        {value, merlin:revert(X__Value)}
                     ]}
                 )
         end
-    end)())
+    end)(Expr))
 end).
+
+-define(_assertMerlMatch(Guard, Expr), ?_test(?assertMerlMatch(Guard, Expr))).
 
 %% Merl compatible version of ?assertEqual/2
 %% For use with merls `?Q/1' macro, `?assertMerlEqual(?Q(...), Expr)'
@@ -44,14 +45,13 @@ end).
 %% It also reverts both the {@link merl:tree/1. expected} and
 %% {@link merlin_revert/1. actual} syntax trees to make it easier to compare.
 -define(assertMerlEqual(Expected, Expr),
-    ((fun() ->
-        __Value__ = Expr,
-        case __Value__ of
+    ((fun(X__Value) ->
+        case X__Value of
             Expected ->
                 ok;
             _ ->
                 io:format("Expected~n~s~n~nto equal~n~s~n", [
-                    merlin_merl:format(__Value__),
+                    merlin_merl:format(X__Value),
                     merlin_merl:format(Expected)
                 ]),
                 erlang:error(
@@ -60,56 +60,57 @@ end).
                         {line, ?LINE},
                         {expression, ??Expr},
                         {expected, merl:tree(Expected)},
-                        {value, merlin:revert(__Value__)}
+                        {value, merlin:revert(X__Value)}
                     ]}
                 )
         end
-    end)())
+    end)(Expr))
 ).
+-define(_assertMerlEqual(Expected, Expr), ?_test(?assertMerlEqual(Expected, Expr))).
 
 %% Asserts that the given `Expr' is a valid {@link erl_syntax} form.
 %%
 %% Returns the type of the form.
 -define(assertIsForm(Expr), begin
-    (fun() ->
-        Node__ = Expr,
-        try erl_syntax:type(Node__) of
+    (fun(X__Node) ->
+        try erl_syntax:type(X__Node) of
             __Type__ -> __Type__
         catch
-            error:{badarg, Node__}:__Stacktrace__ ->
+            error:{badarg, X__Node}:__Stacktrace__ ->
                 erlang:raise(
                     error,
-                    {assert, [
+                    {assertNotException, [
                         {module, ?MODULE},
                         {line, ?LINE},
                         {expression, "erl_syntax:type(" ??Expr ")"},
-                        {expected, form},
-                        {value, Node__}
+                        {pattern, "{ error , {badarg, _} , [...] }"},
+                        {unexpected_exception, {error, {badarg, X__Node}, __Stacktrace__}}
                     ]},
                     __Stacktrace__
                 )
         end
-    end)()
+    end)(
+        Expr
+    )
 end).
 
 %% Asserts that the given `Expr' is a valid form with the given `Type'.
 -define(assertNodeType(Expr, Type), begin
-    (fun() ->
-        Type__ = Type,
-        case ?assertIsForm(Expr) of
-            Type__ ->
-                ok;
-            __Value__ ->
-                erlang:error(
-                    {assertEqual, [
-                        {module, ?MODULE},
-                        {line, ?LINE},
-                        {expression, "erl_syntax:type(" ??Expr ") =:= " ??Type},
-                        {expected, Type__},
-                        {value, __Value__}
-                    ]}
-                )
-        end
-    end)()
+    (fun
+        (X__TypeOfExpr, X__ExpectedType) when X__TypeOfExpr =:= X__ExpectedType ->
+            ok;
+        (X__TypeOfExpr, X__ExpectedType) ->
+            erlang:error(
+                {assertEqual, [
+                    {module, ?MODULE},
+                    {line, ?LINE},
+                    {expression, "erl_syntax:type(" ??Expr ") =:= " ??Type},
+                    {expected, X__ExpectedType},
+                    {value, X__TypeOfExpr}
+                ]}
+            )
+    end)(
+        ?assertIsForm(Expr), Type
+    )
 end).
 -endif.

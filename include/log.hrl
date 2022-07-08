@@ -100,10 +100,10 @@
 ).
 
 -define(pp(Expr), begin
-    (fun(Forms) ->
-        {Format, Args} = merlin_internal:format_forms({??Expr " = ", Forms}),
-        io:format(Format ++ "~n", Args),
-        Forms
+    (fun(X__Forms) ->
+        {X__Format, X__Args} = merlin_internal:format_forms({??Expr " = ", X__Forms}),
+        io:format(X__Format ++ "~n", X__Args),
+        X__Forms
     end)(
         Expr
     )
@@ -112,13 +112,13 @@ end).
 -define(ppr(Expr), ?pp(merlin:revert(Expr))).
 
 -define(ppt(Expr), begin
-    (fun(Forms, {current_stacktrace, Stacktrace}) ->
-        {Format, Args} = merlin_internal:format_forms({??Expr " = ", Forms}),
+    (fun(X__Forms, {current_stacktrace, X__Stacktrace}) ->
+        {X__Format, X__Args} = merlin_internal:format_forms({??Expr " = ", X__Forms}),
         io:format(
-            Format ++ "~n~s~n",
-            Args ++ [merlin_internal:format_stack(Stacktrace)]
+            X__Format ++ "~n~s~n",
+            X__Args ++ [merlin_internal:format_stack(X__Stacktrace)]
         ),
-        Forms
+        X__Forms
     end)(
         Expr,
         erlang:process_info(self(), current_stacktrace)
@@ -126,9 +126,9 @@ end).
 end).
 
 -define(var(Expr), begin
-    (fun(Term) ->
-        io:format("~s =~n~p~n", [??Expr, Term]),
-        Term
+    (fun(X__Term) ->
+        io:format("~s =~n~p~n", [??Expr, X__Term]),
+        X__Term
     end)(
         Expr
     )
@@ -137,13 +137,13 @@ end).
 -define(varr(Expr), ?var(merlin:revert(Expr))).
 
 -define(vart(Expr), begin
-    (fun(Term, {current_stacktrace, Stacktrace}) ->
+    (fun(X__Term, {current_stacktrace, X__Stacktrace}) ->
         io:format("~s =~n~p~n~s~n", [
             ??Expr,
-            Term,
-            merlin_internal:format_stack(Stacktrace)
+            X__Term,
+            merlin_internal:format_stack(X__Stacktrace)
         ]),
-        Term
+        X__Term
     end)(
         Expr,
         erlang:process_info(self(), current_stacktrace)
