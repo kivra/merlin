@@ -440,7 +440,7 @@ function_clause_to_case_clause(Clause0) ->
             merlin_lib:set_annotation(Clause1, function_clause, true)
     end.
 
-%% @doc Returns a {@link erl_syntax:list. list node} with the result of
+%% @doc Returns a {@link erl_syntax:list/1. list node} with the result of
 %% mapping {@link clause_to_fun/1} over the given `Clauses'.
 clauses_to_fun(Clauses) ->
     erl_syntax:list(lists:map(fun clause_to_fun/1, Clauses)).
@@ -766,7 +766,7 @@ update_clause(Clause, Patterns, Guard) ->
 %% `Body'.
 %% Instead of replacing, you can given the atom `copy' to copy one from the
 %% original. This is to allow partial updates.
-%% Finally, you can given `underscore` as the pattern as a shorthand for a
+%% Finally, you can given `underscore' as the pattern as a shorthand for a
 %% match all pattern. This also clears any guard. If you want a match all
 %% clause with a guard, supply the match all pattern yourself.
 update_clause(Clause, underscore, _, Body) ->

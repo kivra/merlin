@@ -3,8 +3,8 @@
 
 -compile({parse_transform, merlin_with_statement}).
 
-%% This makes it look like a real keyword `?with [...] of` instead of
-%% `?with([...]) of`
+%% This makes it look like a real keyword `?with [...] of' instead of
+%% `?with([...]) of'
 -define(with, case merlin_with_statement:'MARKER'() and).
 
 -define(with(Expressions),

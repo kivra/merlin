@@ -24,6 +24,7 @@
 -compile([export_all, nowarn_export_all]).
 -endif.
 
+%% @hidden
 'DEFINE PROCEDURAL MACRO'(
     File,
     Line,
@@ -272,6 +273,7 @@ foldl_binary(Fun, AccIn, <<Char/utf8, Rest/binary>>) ->
 split_by(List, Fun) when is_list(List) andalso is_function(Fun, 1) ->
     split_by(List, Fun, []).
 
+%% @private
 split_by([], _Fun, Acc) ->
     {lists:reverse(Acc), undefined, []};
 split_by([Head | Tail], Fun, Acc) ->
@@ -303,13 +305,13 @@ export_all(Module) when is_atom(Module) ->
     code:load_binary(Module, Beamfile, Beam1).
 
 %% @doc Works like {@link merl:quote/1}, but also accepts
-%% {@link erl_syntax:string/1 .string nodes}. Instead of throwing
+%% {@link erl_syntax:string/1. string nodes}. Instead of throwing
 %% `{error, Reason}', it returns a valid
 %% <a href="https://erlang.org/doc/man/erl_parse.html#errorinfo">
 %% error info</a>.
 %%
 %% The first argument is a file string (or node) and is used for the
-%% <a href="https://erlang.org/doc/man/erl_parse.html#errorinfo">
+%% <a href="https://erlang.org/doc/man/erl_parse.html#errorinfo">`errorinfo'</a>
 quote(File0, Line0, Source0) ->
     File1 = safe_value(File0),
     Line1 = safe_value(Line0),

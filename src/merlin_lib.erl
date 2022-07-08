@@ -690,7 +690,7 @@ get_binding_type(Form, Name) when is_tuple(Form) ->
     get_binding_type(get_annotations(Form), Name).
 
 %% @doc Get all bindings for the given value.
-%% Can be a set of annotations, see {@ get_annotations/1}, or
+%% Can be a set of annotations, see {@link get_annotations/1}, or
 %% {@link merlin:ast/0} form from which those annotations are taken.
 -spec get_bindings(bindings_or_form()) -> ordsets:ordset(atom()).
 get_bindings(#{bound := Bound, env := Env, free := Free}) ->
