@@ -1,5 +1,25 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%% @doc Parse transform helper library
+%%%
+%%% The main function is {@link transform/3}, which let's you easily traverse
+%%% an {@link ast()}, optionally modify it, and carry a state.
+%%%
+%%% There's some of {@link annotate/2. helper} {@link analyze/1. functions}
+%%% that provides easy access to commonly needed information. For example the
+%%% current set of {@link erl_syntax_lib:annotate_bindings/2. bindings} and
+%%% the <abbr title="Module:Function/Arity">MFA</abbr> for every
+%%% {@link erl_syntax:application/2. function call}.
+%%%
+%%% Finally, when you're done transforming {@link return/1} the result in the
+%%% format expected by {@link erl_lint} (or else you crash the compiler).
+%%% @end
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%%%_* Module declaration =====================================================
 -module(merlin).
 
+%%%_* Exports ================================================================
+%%%_ * API -------------------------------------------------------------------
 -export([
     annotate/1,
     annotate/2,
@@ -12,6 +32,7 @@
     return/1
 ]).
 
+%%%_* Types ------------------------------------------------------------------
 -export_type([
     action/0,
     ast/0,
@@ -26,10 +47,13 @@
     parse_transform_return/0
 ]).
 
+%%%_* Includes ===============================================================
 -include("log.hrl").
 
+%%%_* Macros =================================================================
 -define(else, true).
 
+%%%_* Types ==================================================================
 -record(state, {
     file :: string(),
     module :: module(),
@@ -43,8 +67,8 @@
 -type error_marker() :: {error, marker_with_file()}.
 -type warning_marker() :: {warning, marker_with_file()}.
 
-%% {Type, {File, {Position, Module, Reason}}}.
 -type marker_with_file() :: {File :: string(), exception_marker()}.
+%% {Type, {File, {Position, Module, Reason}}}.
 
 -type exception_marker() ::
     {Position :: erl_anno:location(), Module :: module(), Reason :: term()}.
@@ -100,6 +124,120 @@
 
 -type function_name() :: atom() | {atom(), pos_integer()} | {module(), atom()}.
 
+%%%_* Code ===================================================================
+%%%_ * API -------------------------------------------------------------------
+
+%% @equiv annotate(ModuleForms, [bindings, resolve_calls, file])
+-spec annotate([ast()]) -> [ast()].
+annotate(ModuleForms) ->
+    annotate(ModuleForms, [bindings, resolve_calls, file]).
+
+%% @doc Annotate the given module {@link ast(). forms} according to the given
+%% options.
+%%
+%% It always annotates each function definition with a `is_exported'
+%% {@link merlin_lib:get_annotation/2. annotation}.
+%%
+%% <dl>
+%% <dt>`bindings'</dt>
+%% <dd>See {@link erl_syntax_lib:annotate_bindings/2}</dd>
+%% <dt>`resolve_calls'</dt>
+%% <dd>Resolves local and remote calls according to the `-import' attributes,
+%% if any. For all successfully resolved calls, this sets both a `module' and
+%% `is_exported' {@link merlin_lib:get_annotation/2. annotation} on the
+%% {@link erl_syntax:application/2. `application'} form.</dd>
+%% <dt>`file'</dt>
+%% <dd>Each form is annotated with the current file, as determined by the most
+%% recent `-file' attribute.</dd>
+%% </dl>
+-spec annotate([ast()], Options) -> [ast()] when
+    Options :: [Option | {Option, boolean()}],
+    Option :: bindings | resolve_calls | file.
+annotate(ModuleForms, Options) ->
+    State = maps:merge(maps:from_list(proplists:unfold(Options)), #{
+        analysis => analyze(ModuleForms)
+    }),
+    {Forms, #{analysis := Analysis}} = transform(
+        ModuleForms,
+        fun annotate_internal/3,
+        State
+    ),
+    [
+        case
+            erl_syntax:type(Form) =:= attribute andalso
+                merlin_lib:value(erl_syntax:attribute_name(Form)) =:= module
+        of
+            true ->
+                merlin_lib:set_annotation(Form, analysis, Analysis);
+            false ->
+                Form
+        end
+     || Form <- Forms
+    ].
+
+%% @doc Like `erl_syntax_lib:analyze_forms' but returns maps.
+%%
+%% Also all fields are present, except `module' so you can determine if it
+%% exists or not. It also includes a `file' field and makes some fields
+%% easier to use, like records being a map from name to definition.
+%%
+%% @see analysis()
+-spec analyze([ast()]) -> analysis().
+analyze(ModuleForms) ->
+    Analysis = maps:from_list(erl_syntax_lib:analyze_forms(ModuleForms)),
+    Analysis#{
+        %% `module' is taken from Analysis if defined
+        exports => maps:get(exports, Analysis, []),
+        functions => maps:get(functions, Analysis, []),
+        imports => get_as_map(Analysis, imports),
+        attributes => attribute_map(Analysis),
+        %% Seems unused, at least the docs does not mention carte blanc `-import'
+        module_imports => maps:get(module_imports, Analysis, []),
+        records => maps:map(
+            fun record_fields_as_map/2,
+            get_as_map(Analysis, records)
+        ),
+
+        %% Not part of the original, but so useful to have
+        file => merlin_lib:file(ModuleForms)
+    }.
+
+%% @doc Same as @{link analyze/1}, but also extracts and appends any inline
+%% `-compile' options to the given one.
+-spec analyze([ast()], [compile:option()]) -> {analysis(), [compile:option()]}.
+analyze(ModuleForms, Options) ->
+    Analysis = analyze(ModuleForms),
+    CombinedOptions =
+        case Analysis of
+            #{attributes := #{compile := InlineOptions}} ->
+                Options ++ lists:flatten(InlineOptions);
+            _ ->
+                Options
+        end,
+    {Analysis, CombinedOptions}.
+
+%% @doc Returns the first form for which the given function returns true.
+%% This returns a `{ok, Form}' tuple on success, and `{error, notfound}'
+%% otherwise.
+find_form(Forms, Fun) when is_function(Fun, 1) ->
+    try transform(Forms, fun find_form_transformer/3, Fun) of
+        _ -> {error, notfound}
+    catch
+        %% Use the `fun' in the pattern to make it less likely to accidentally
+        %% catch something.
+        error:{found, Fun, Form} -> {ok, Form}
+    end.
+
+%% @doc Returns a flat list with all forms for which the given function
+%% returns true, if any. They are returned in source order.
+find_forms(Forms, Fun) when is_function(Fun, 1) ->
+    {_, #{result := Result}} = transform(
+        Forms,
+        fun find_forms_transformer/3,
+        #{filter => Fun, result => []}
+    ),
+    lists:reverse(Result).
+
 %% @doc Transforms the given `Forms' using the given `Transformer' with the
 %% given `State'.
 %%
@@ -129,8 +267,8 @@ transform(Forms, Transformer, Extra) when is_function(Transformer, 3) ->
             transform_internal(Forms, InternalState0)
         catch
             throw:Reason:Stacktrace ->
-                %% compile:foldl_transform/3 uses a `catch F(...)` when calling parse
-                %% transforms. Unfortunately this means `throw`n errors turns into
+                %% compile:foldl_transform/3 uses a `catch F(...)' when calling parse
+                %% transforms. Unfortunately this means `throw'n errors turns into
                 %% normal values.
                 ?log_exception(throw, Reason, Stacktrace),
                 erlang:raise(error, Reason, Stacktrace);
@@ -143,21 +281,296 @@ transform(Forms, Transformer, Extra) when is_function(Transformer, 3) ->
     ?show(Forms2),
     {Forms2, InternalState1#state.extra}.
 
+%% @doc Returns the result from {@link transform/3}, or just the
+%% final forms, to an {@link erl_lint} compatible format.
+%%
+%% This {@link revert/1. reverts} and forms, while respecting any
+%% errors and/or warnings.
+-spec return(parse_transform_return() | {parse_transform_return(), State}) ->
+    parse_transform_return()
+when
+    State :: term().
+return({Result, _State}) ->
+    _ = merlin_internal:write_log_file(),
+    return(Result);
+return({warning, Tree, Warnings}) ->
+    _ = merlin_internal:write_log_file(),
+    {warning, revert(Tree), Warnings};
+return({error, _Error, _Warnings} = Result) ->
+    _ = merlin_internal:write_log_file(),
+    Result;
+return(Tree) ->
+    _ = merlin_internal:write_log_file(),
+    revert(Tree).
+
+%% @doc Reverts back from Syntax Tools format to Erlang forms.
+%%
+%% Accepts a list of forms, or a single form.
+%%
+%% Copied from `parse_trans:revert_form/1' and slightly modified. The original
+%% also handles a bug in R16B03, but that is ancient history now.
+revert(Forms) when is_list(Forms) ->
+    lists:map(fun revert/1, Forms);
+revert(Form) ->
+    case erl_syntax:revert(Form) of
+        {attribute, Line, Arguments, Tree} when element(1, Tree) == tree ->
+            {attribute, Line, Arguments, erl_syntax:revert(Tree)};
+        Result ->
+            Result
+    end.
+
+%%%_* Private ----------------------------------------------------------------
+%%% Start annotate helpers
+
 %% @private
-%% @doc Returns the result of {@link transform_internal/2} as expected by
-%% {@link erl_lint}.
-%%
-%% However, the returned forms are in {@link erl_syntax} format and must be
-%% {@link revert/1. reverted} before returning from a parse_transform. You can
-%% use {@link return/1} for that.
-%%
-%% This matches the `case' in {@link compile:foldl_transform/3}.
-finalize(Tree, #state{errors = [], warnings = []}) ->
-    Tree;
-finalize(Tree, #state{errors = [], warnings = Warnings}) ->
-    {warning, Tree, group_by_file(Warnings)};
-finalize(_Tree, #state{errors = Errors, warnings = Warnings}) ->
-    {error, group_by_file(Errors), group_by_file(Warnings)}.
+annotate_internal(enter, Form0, #{analysis := Analysis0} = State0) ->
+    Analysis1 =
+        case maybe_get_file_attribute(Form0) of
+            false -> Analysis0;
+            NewFile -> Analysis0#{file => NewFile}
+        end,
+    State1 = State0#{analysis => Analysis1},
+    Form1 =
+        case State1 of
+            #{file := true, analysis := #{file := File}} ->
+                merlin_lib:set_annotation(Form0, file, File);
+            _ ->
+                Form0
+        end,
+    case annotate_form(erl_syntax:type(Form1), Form1, State1) of
+        {error, _} = Form2 -> Form2;
+        {warning, _} = Form2 -> Form2;
+        Form2 -> {continue, Form2, State1}
+    end;
+annotate_internal(_, _, _) ->
+    continue.
+
+%% @private
+maybe_get_file_attribute(Form) ->
+    case erl_syntax:type(Form) of
+        attribute ->
+            case erl_syntax:atom_value(erl_syntax:attribute_name(Form)) of
+                file ->
+                    [Filename, _Line] = erl_syntax:attribute_arguments(Form),
+                    erl_syntax:string_value(Filename);
+                _ ->
+                    false
+            end;
+        _ ->
+            false
+    end.
+
+%% @private
+annotate_form(application, Form, #{
+    analysis := Analysis,
+    resolve_calls := true
+}) ->
+    case resolve_application(Form, Analysis) of
+        {ok, Module, Name, Arity} ->
+            merlin_lib:set_annotations(Form, #{
+                is_exported => is_exported(Name, Arity, Analysis),
+                module => Module
+            });
+        dynamic ->
+            %% Dynamic value, can't resolve
+            Form;
+        ErrorOrWarning ->
+            ErrorOrWarning
+    end;
+annotate_form(function, Form0, #{
+    bindings := Bindings,
+    analysis := #{
+        attributes := Attributes
+    } = Analysis
+}) ->
+    Name = erl_syntax:atom_value(erl_syntax:function_name(Form0)),
+    Arity = erl_syntax:function_arity(Form0),
+    Form1 = merlin_lib:set_annotation(Form0, is_exported, is_exported(Name, Arity, Analysis)),
+    Form2 =
+        case Attributes of
+            #{spec := #{{Name, Arity} := Spec}} ->
+                merlin_lib:set_annotation(Form0, spec, Spec);
+            _ ->
+                Form1
+        end,
+    if
+        Bindings ->
+            Env = merlin_lib:get_annotation(Form2, env, ordsets:new()),
+            erl_syntax_lib:annotate_bindings(Form2, Env);
+        ?else ->
+            Form2
+    end;
+annotate_form(_, Form, _) ->
+    Form.
+
+%% @private
+resolve_application(Node, Analysis) ->
+    Body = erl_syntax:module_qualifier_body(Node),
+    case erl_syntax:type(Body) of
+        atom ->
+            case resolve_application_internal(Node, Analysis) of
+                {ok, Module} ->
+                    Name = erl_syntax:atom_value(Body),
+                    Arity = length(erl_syntax:application_arguments(Node)),
+                    {ok, Module, Name, Arity};
+                dynamic ->
+                    dynamic;
+                ErrorOrWarning ->
+                    ErrorOrWarning
+            end;
+        _ ->
+            dynamic
+    end.
+
+%% @private
+resolve_application_internal(Node, Analysis) ->
+    Operator = erl_syntax:application_operator(Node),
+    case erl_syntax:type(Operator) of
+        module_qualifier ->
+            resolve_remote_application(Operator);
+        atom ->
+            resolve_local_application(Node, Analysis);
+        _ ->
+            %% Dynamic value, can't resolve
+            dynamic
+    end.
+
+%% @private
+resolve_remote_application(Operator) ->
+    Qualifier = erl_syntax:module_qualifier_argument(Operator),
+    case erl_syntax:type(Qualifier) of
+        atom ->
+            CallModule = erl_syntax:atom_value(Qualifier),
+            {ok, CallModule};
+        _ ->
+            %% Dynamic value, can't resolve
+            dynamic
+    end.
+
+%% @private
+resolve_local_application(
+    Node,
+    #{
+        functions := Functions,
+        imports := Imports
+    } = Analysis
+) ->
+    Operator = erl_syntax:application_operator(Node),
+    Name = erl_syntax:atom_value(Operator),
+    Arity = length(erl_syntax:application_arguments(Node)),
+    Function = {Name, Arity},
+    case lists:member(Function, Functions) of
+        true ->
+            %% Function defined in this module
+            case Analysis of
+                #{module := CallModule} ->
+                    {ok, CallModule};
+                _ ->
+                    {warning, "Missing -module, can't resolve local function calls"}
+            end;
+        false ->
+            case
+                [
+                    CallModule
+                 || {CallModule, ImportedFunctions} <- maps:to_list(Imports),
+                    lists:member(Function, ImportedFunctions)
+                ]
+            of
+                [CallModule] ->
+                    {ok, CallModule};
+                [] ->
+                    %% Assume all other calls refer to builtin functions
+                    %% Maybe add a sanity check for compile no_auto_import?
+                    {ok, erlang};
+                CallModules ->
+                    ListPhrase = list_phrase(CallModules),
+                    Message = lists:flatten(
+                        io_lib:format(
+                            "Overlapping -import for ~tp/~tp from ~s",
+                            [Name, Arity, ListPhrase]
+                        )
+                    ),
+                    {error, Message}
+            end
+    end.
+
+%% @private
+list_phrase(List) ->
+    CommaSeperatedList = lists:join(", ", List),
+    LastCommaReplacedWithAnd = string:replace(
+        CommaSeperatedList,
+        ", ",
+        " and ",
+        trailing
+    ),
+    lists:concat(LastCommaReplacedWithAnd).
+
+%% @private
+is_exported(Name, Arity, #{exports:=Exports}) ->
+    lists:member({Name, Arity}, Exports).
+
+%%% Start analyze helpers
+
+%% @private
+get_as_map(Analysis, Key) ->
+    maps:from_list(maps:get(Key, Analysis, [])).
+
+%% @private
+record_fields_as_map(_Key, Fields) ->
+    maps:from_list(Fields).
+
+%% @private
+attribute_map(Analysis) when not is_map_key(attributes, Analysis) ->
+    #{};
+attribute_map(#{attributes := []}) ->
+    #{};
+attribute_map(#{attributes := Attributes}) ->
+    Groups = lists:foldl(fun pair_grouper/2, #{}, Attributes),
+    Groups#{
+        spec => group_by_name(maps:get(spec, Groups, [])),
+        type => group_by_name(maps:get(type, Groups, []))
+    }.
+
+%% @private
+%% @doc Groups the list of variable length tuples by their first element.
+group_by_name(Tuples) ->
+    group_pairs([{element(1, Value), Value} || Value <- Tuples]).
+
+%% @private
+%% @doc Groups the given list of two-tuples into a map.
+group_pairs(Pairs) ->
+    lists:foldl(fun pair_grouper/2, #{}, Pairs).
+
+%% @private
+pair_grouper({Type, Value}, Groups) ->
+    Values = maps:get(Type, Groups, []),
+    maps:put(Type, [Value | Values], Groups).
+
+%%% Start find_form helpers
+
+%% @private
+find_form_transformer(Phase, Form, Fun) when Phase =:= enter orelse Phase =:= leaf ->
+    case Fun(Form) of
+        true -> error({found, Fun, Form});
+        false -> continue
+    end;
+find_form_transformer(_, _, _) ->
+    continue.
+
+%% @private
+find_forms_transformer(Phase, Form, #{filter := Fun, result := Result} = State) when
+    Phase =:= enter orelse Phase =:= leaf
+->
+    case Fun(Form) of
+        true ->
+            {continue, Form, State#{result := [Form | Result]}};
+        false ->
+            continue
+    end;
+find_forms_transformer(_, _, _) ->
+    continue.
+
+%%% Start transform helpers
 
 %% @private
 -spec transform_internal(FormOrForms, #state{}) -> {ast(), #state{}} when
@@ -202,6 +615,7 @@ transform_internal(Form, State0) ->
             end
     end.
 
+%% @private
 form_kind(Form) ->
     case erl_syntax:is_leaf(Form) of
         true ->
@@ -210,51 +624,7 @@ form_kind(Form) ->
             erl_syntax:type(Form)
     end.
 
-update_file(Form, State) ->
-    case get_file_attribute(Form) of
-        false ->
-            State;
-        NewFile ->
-            ?info("Changing file ~s", [NewFile]),
-            set_logger_target(file, NewFile),
-            State#state{file = NewFile}
-    end.
-
-set_target_mfa(Node, #state{module = Module}) ->
-    case erl_syntax:type(Node) of
-        function ->
-            Name = merlin_lib:value(erl_syntax:function_name(Node)),
-            Arity = erl_syntax:function_arity(Node),
-            set_logger_target(mfa, {Module, Name, Arity});
-        _ ->
-            ok
-    end.
-
-increment_depth(#state{depth = Depth} = State) ->
-    set_logger_target(indent, lists:duplicate(Depth + 1, "    ")),
-    State#state{depth = Depth + 1}.
-
-decrement_depth(#state{depth = 1} = State) ->
-    unset_logger_target(indent),
-    State#state{depth = 0};
-decrement_depth(#state{depth = Depth} = State) ->
-    set_logger_target(indent, lists:duplicate(Depth - 1, "    ")),
-    State#state{depth = Depth - 1}.
-
-get_file_attribute(Form) ->
-    case erl_syntax:type(Form) of
-        file ->
-            case erl_syntax:atom_value(erl_syntax:attribute_name(Form)) of
-                file ->
-                    [Filename, _Line] = erl_syntax:attribute_arguments(Form),
-                    erl_syntax:string_value(Filename);
-                _ ->
-                    false
-            end;
-        _ ->
-            false
-    end.
-
+%% @private
 -spec mapfold_subtrees(Fun, #state{}, ast()) -> {ast(), #state{}} when
     Fun :: fun((ast(), #state{}) -> {ast(), #state{}}).
 mapfold_subtrees(Fun, State0, Tree0) ->
@@ -330,38 +700,6 @@ call_transformer(
 is_error_or_warning({error, _}) -> true;
 is_error_or_warning({warning, _}) -> true;
 is_error_or_warning(_) -> false.
-
-log_call_transformer(Phase, NodeIn, ExtraIn, Action, NodeOrNodes, ExtraOut) ->
-    NodeOut =
-        case NodeOrNodes of
-            [Head | _] -> Head;
-            _ -> NodeOrNodes
-        end,
-    set_logger_target(line, erl_syntax:get_pos(NodeOut)),
-    set_logger_target(state, ExtraOut),
-    ?info(
-        if
-            is_list(NodeOrNodes) -> "~s ~s -> ~s [~s, ...]";
-            ?else -> "~s ~s -> ~s ~s"
-        end,
-        [Phase, erl_syntax:type(NodeIn), Action, erl_syntax:type(NodeOut)]
-    ),
-    ?debug(
-        lists:flatten(
-            lists:join($\n, [
-                "NodeIn = ~s",
-                "ExtraIn = ~tp",
-                "NodeOrNodes = ~s",
-                "ExtraOut = ~tp"
-            ])
-        ),
-        [
-            merlin_internal:format_forms(NodeIn),
-            ExtraIn,
-            merlin_internal:format_forms(NodeOrNodes),
-            ExtraOut
-        ]
-    ).
 
 %% @private
 %% @doc Normalizes the return value from the user transformar into a
@@ -465,6 +803,14 @@ expand_callback_return(Node1, Node0, Extra0) ->
             {continue, Node1, Extra0, []}
     end.
 
+%% @private
+ungroup_exceptions(Type, Groups) ->
+    [
+        {Type, {File, Marker}}
+     || {File, Markers} <- Groups,
+        Marker <- Markers
+    ].
+
 check_syntax(Node) ->
     try
         erl_syntax:type(Node)
@@ -505,7 +851,7 @@ format_marker(
 ->
     case File of
         [] ->
-            %% Rebar crashes on empty `file`
+            %% Rebar crashes on empty `file'
             {Type, {State#state.file, Marker}};
         _ ->
             {Type, Marker}
@@ -525,11 +871,29 @@ format_marker(Type, Reason, Node, #state{
         end,
     {Type, {File, {Position, FormattingModule, Reason}}}.
 
+%% @private
+%% @doc Returns the result of {@link transform_internal/2} as expected by
+%% {@link erl_lint}.
+%%
+%% However, the returned forms are in {@link erl_syntax} format and must be
+%% {@link revert/1. reverted} before returning from a parse_transform. You can
+%% use {@link return/1} for that.
+%%
+%% This matches the `case' in {@link compile:foldl_transform/3}.
+finalize(Tree, #state{errors = [], warnings = []}) ->
+    Tree;
+finalize(Tree, #state{errors = [], warnings = Warnings}) ->
+    {warning, Tree, group_by_file(Warnings)};
+finalize(_Tree, #state{errors = Errors, warnings = Warnings}) ->
+    {error, group_by_file(Errors), group_by_file(Warnings)}.
+
+%% @private
 -spec group_by_file(Exceptions) -> [{File :: string(), [exception_marker()]}] when
     Exceptions :: [error_marker() | warning_marker() | marker_with_file()].
 group_by_file(Exceptions) ->
     maps:to_list(lists:foldl(fun group_by_file/2, #{}, Exceptions)).
 
+%% @private
 -spec group_by_file(Exception, Files) -> Files when
     Exception :: error_marker() | warning_marker() | marker_with_file(),
     Files :: #{File => [exception_marker()]},
@@ -550,327 +914,77 @@ group_by_file({File, Marker}, Files) ->
         File => [Marker | Markers]
     }.
 
-ungroup_exceptions(Type, Groups) ->
-    [
-        {Type, {File, Marker}}
-     || {File, Markers} <- Groups,
-        Marker <- Markers
-    ].
-
-%% @doc Returns the first form for which the given function returns true.
-%% This returns a `{ok, Form}' tuple on success, and `{error, notfound}`
-%% otherwise.
-find_form(Forms, Fun) when is_function(Fun, 1) ->
-    try transform(Forms, fun find_form_transformer/3, Fun) of
-        _ -> {error, notfound}
-    catch
-        %% Use the `fun' in the pattern to make it less likely to accidentally
-        %% catch something.
-        error:{found, Fun, Form} -> {ok, Form}
-    end.
+%% Logger helpers
 
 %% @private
-find_form_transformer(Phase, Form, Fun) when Phase =:= enter orelse Phase =:= leaf ->
-    case Fun(Form) of
-        true -> error({found, Fun, Form});
-        false -> continue
-    end;
-find_form_transformer(_, _, _) ->
-    continue.
-
-%% @doc Returns a flat list with all forms for which the given function
-%% returns true, if any. They are returned in source order.
-find_forms(Forms, Fun) when is_function(Fun, 1) ->
-    {_, #{result := Result}} = transform(
-        Forms,
-        fun find_forms_transformer/3,
-        #{filter => Fun, result => []}
+log_call_transformer(Phase, NodeIn, ExtraIn, Action, NodeOrNodes, ExtraOut) ->
+    NodeOut =
+        case NodeOrNodes of
+            [Head | _] -> Head;
+            _ -> NodeOrNodes
+        end,
+    set_logger_target(line, erl_syntax:get_pos(NodeOut)),
+    set_logger_target(state, ExtraOut),
+    ?info(
+        if
+            is_list(NodeOrNodes) -> "~s ~s -> ~s [~s, ...]";
+            ?else -> "~s ~s -> ~s ~s"
+        end,
+        [Phase, erl_syntax:type(NodeIn), Action, erl_syntax:type(NodeOut)]
     ),
-    lists:reverse(Result).
-
-%% @private
-find_forms_transformer(Phase, Form, #{filter := Fun, result := Result} = State) when
-    Phase =:= enter orelse Phase =:= leaf
-->
-    case Fun(Form) of
-        true ->
-            {continue, Form, State#{result := [Form | Result]}};
-        false ->
-            continue
-    end;
-find_forms_transformer(_, _, _) ->
-    continue.
-
-%% @doc Like `erl_syntax_lib:analyze_forms' but returns maps.
-%% Also all fields are present, except `module' so you can determine if it
-%% exists or not. It also includes a `file' field and makes some fields
-%% easier to use, like records being a map from name to definition.
--spec analyze([ast()]) -> analysis().
-analyze(ModuleForms) ->
-    Analysis = maps:from_list(erl_syntax_lib:analyze_forms(ModuleForms)),
-    Analysis#{
-        %% `module` is taken from Analysis if defined
-        exports => maps:get(exports, Analysis, []),
-        functions => maps:get(functions, Analysis, []),
-        imports => get_as_map(Analysis, imports),
-        attributes => attribute_map(Analysis),
-        %% Seems unused, at least the docs does not mention carte blanc `-import`
-        module_imports => maps:get(module_imports, Analysis, []),
-        records => maps:map(
-            fun record_fields_as_map/2,
-            get_as_map(Analysis, records)
+    ?debug(
+        lists:flatten(
+            lists:join($\n, [
+                "NodeIn = ~s",
+                "ExtraIn = ~tp",
+                "NodeOrNodes = ~s",
+                "ExtraOut = ~tp"
+            ])
         ),
-
-        %% Not part of the original, but so useful to have
-        file => merlin_lib:file(ModuleForms)
-    }.
-
-%% @doc Same as `analyze/1`, but also extracts and appends any inline
-%% `-compile` options to the given one.
-analyze(ModuleForms, Options) ->
-    Analysis = analyze(ModuleForms),
-    CombinedOptions =
-        case Analysis of
-            #{attributes := #{compile := InlineOptions}} ->
-                Options ++ lists:flatten(InlineOptions);
-            _ ->
-                Options
-        end,
-    {Analysis, CombinedOptions}.
+        [
+            merlin_internal:format_forms(NodeIn),
+            ExtraIn,
+            merlin_internal:format_forms(NodeOrNodes),
+            ExtraOut
+        ]
+    ).
 
 %% @private
-get_as_map(Analysis, Key) ->
-    maps:from_list(maps:get(Key, Analysis, [])).
+update_file(Form, State) ->
+    case maybe_get_file_attribute(Form) of
+        false ->
+            State;
+        NewFile ->
+            ?info("Changing file ~s", [NewFile]),
+            set_logger_target(file, NewFile),
+            State#state{file = NewFile}
+    end.
 
 %% @private
-record_fields_as_map(_Key, Fields) ->
-    maps:from_list(Fields).
-
-%% @private
-attribute_map(Analysis) when not is_map_key(attributes, Analysis) ->
-    #{};
-attribute_map(#{attributes := []}) ->
-    #{};
-attribute_map(#{attributes := Attributes}) ->
-    Groups = lists:foldl(fun pair_grouper/2, #{}, Attributes),
-    Groups#{
-        spec => group_by_name(maps:get(spec, Groups, [])),
-        type => group_by_name(maps:get(type, Groups, []))
-    }.
-
-%% @private
-%% @doc Groups the given list of two-tuples into a map.
-group_pairs(Pairs) ->
-    lists:foldl(fun pair_grouper/2, #{}, Pairs).
-
-%% @private
-pair_grouper({Type, Value}, Groups) ->
-    Values = maps:get(Type, Groups, []),
-    maps:put(Type, [Value | Values], Groups).
-
-%% @private
-%% @doc Groups the list of variable length tuples by their first element.
-group_by_name(Tuples) ->
-    group_pairs([{element(1, Value), Value} || Value <- Tuples]).
-
-annotate(ModuleForms) ->
-    annotate(ModuleForms, [bindings, resolve_calls, file]).
-
-annotate(ModuleForms, Options) ->
-    State = maps:merge(maps:from_list(proplists:unfold(Options)), #{
-        analysis => analyze(ModuleForms)
-    }),
-    {Forms, #{analysis := Analysis}} = transform(
-        ModuleForms,
-        fun annotate_internal/3,
-        State
-    ),
-    [
-        case
-            erl_syntax:type(Form) =:= attribute andalso
-                merlin_lib:value(erl_syntax:attribute_name(Form)) =:= module
-        of
-            true ->
-                merlin_lib:set_annotation(Form, analysis, Analysis);
-            false ->
-                Form
-        end
-     || Form <- Forms
-    ].
-
-annotate_internal(enter, Form0, #{analysis := Analysis0} = State0) ->
-    Analysis1 =
-        case get_file_attribute(Form0) of
-            false -> Analysis0;
-            NewFile -> Analysis0#{file => NewFile}
-        end,
-    State1 = State0#{analysis => Analysis1},
-    Form1 =
-        case State1 of
-            #{file := true, analysis := #{file := File}} ->
-                merlin_lib:set_annotation(Form0, file, File);
-            _ ->
-                Form0
-        end,
-    case annotate_form(erl_syntax:type(Form1), Form1, State1) of
-        {error, _} = Form2 -> Form2;
-        {warning, _} = Form2 -> Form2;
-        Form2 -> {continue, Form2, State1}
-    end;
-annotate_internal(_, _, _) ->
-    continue.
-
-annotate_form(application, Form, #{
-    analysis := Analysis,
-    resolve_calls := true
-}) ->
-    case resolve_call(Form, Analysis) of
-        {module, _} = Result ->
-            erl_syntax:add_ann(Result, Form);
-        dynamic ->
-            %% Dynamic value, can't resolve
-            Form;
-        ErrorOrWarning ->
-            ErrorOrWarning
-    end;
-annotate_form(function, Form, #{
-    bindings := Bindings,
-    analysis := #{
-        attributes := Attributes,
-        exports := Exports
-    }
-}) ->
-    Specs = maps:get(spec, Attributes, #{}),
-    Name = erl_syntax:atom_value(erl_syntax:function_name(Form)),
-    Arity = erl_syntax:function_arity(Form),
-    FunctionArity = {Name, Arity},
-    IsExported = lists:member({Name, Arity}, Exports),
-    Form1 = merlin_lib:set_annotation(Form, is_exported, IsExported),
-    Form2 =
-        case Specs of
-            #{FunctionArity := Spec} ->
-                merlin_lib:set_annotation(Form, spec, Spec);
-            _ ->
-                Form1
-        end,
-    if
-        Bindings ->
-            Env = merlin_lib:get_annotation(Form2, env, ordsets:new()),
-            erl_syntax_lib:annotate_bindings(Form2, Env);
-        ?else ->
-            Form2
-    end;
-annotate_form(_, Form, _) ->
-    Form.
-
-resolve_call(
-    Node,
-    #{
-        functions := Functions,
-        imports := Imports
-    } = Analysis
-) ->
-    Operator = erl_syntax:application_operator(Node),
-    case erl_syntax:type(Operator) of
-        module_qualifier ->
-            %% Remote call
-            CallModule = erl_syntax:atom_value(
-                erl_syntax:module_qualifier_argument(Operator)
-            ),
-            {module, CallModule};
-        atom ->
-            %% Local call
-            Name = erl_syntax:atom_value(Operator),
-            Arity = length(erl_syntax:application_arguments(Node)),
-            Function = {Name, Arity},
-            case lists:member(Function, Functions) of
-                true ->
-                    %% Function defined in this module
-                    case Analysis of
-                        #{module := CallModule} ->
-                            {module, CallModule};
-                        _ ->
-                            {warning,
-                                "Missing -module, can't resolve local function calls"}
-                    end;
-                false ->
-                    case
-                        [
-                            CallModule
-                         || {CallModule, ImportedFunctions} <- maps:to_list(Imports),
-                            lists:member(Function, ImportedFunctions)
-                        ]
-                    of
-                        [CallModule] ->
-                            {module, CallModule};
-                        [] ->
-                            %% Assume all other calls refer to builtin functions
-                            %% Maybe add a sanity check for compile no_auto_import?
-                            {module, erlang};
-                        CallModules ->
-                            ListPhrase = list_phrase(CallModules),
-                            Message = lists:flatten(
-                                io_lib:format(
-                                    "Overlapping -import for ~tp/~tp from ~s",
-                                    [Name, Arity, ListPhrase]
-                                )
-                            ),
-                            {error, Message}
-                    end
-            end;
+set_target_mfa(Node, #state{module = Module}) ->
+    case erl_syntax:type(Node) of
+        function ->
+            Name = merlin_lib:value(erl_syntax:function_name(Node)),
+            Arity = erl_syntax:function_arity(Node),
+            set_logger_target(mfa, {Module, Name, Arity});
         _ ->
-            %% Dynamic value, can't resolve
-            dynamic
+            ok
     end.
 
-list_phrase(List) ->
-    CommaSeperatedList = lists:join(", ", List),
-    LastCommaReplacedWithAnd = string:replace(
-        CommaSeperatedList,
-        ", ",
-        " and ",
-        trailing
-    ),
-    lists:concat(LastCommaReplacedWithAnd).
+%% @private
+increment_depth(#state{depth = Depth} = State) ->
+    set_logger_target(indent, lists:duplicate(Depth + 1, "    ")),
+    State#state{depth = Depth + 1}.
 
-%% @doc Returns the result from {@link transform/3}, or just the
-%% final forms, to an {@link erl_lint} compatible format.
-%%
-%% This {@link revert/1. reverts} and forms, while respecting any
-%% errors and/or warnings.
--spec return(parse_transform_return() | {parse_transform_return(), State}) ->
-    parse_transform_return()
-when
-    State :: term().
-return({Result, _State}) ->
-    _ = merlin_internal:write_log_file(),
-    return(Result);
-return({warning, Tree, Warnings}) ->
-    _ = merlin_internal:write_log_file(),
-    {warning, revert(Tree), Warnings};
-return({error, _Error, _Warnings} = Result) ->
-    _ = merlin_internal:write_log_file(),
-    Result;
-return(Tree) ->
-    _ = merlin_internal:write_log_file(),
-    revert(Tree).
+%% @private
+decrement_depth(#state{depth = 1} = State) ->
+    unset_logger_target(indent),
+    State#state{depth = 0};
+decrement_depth(#state{depth = Depth} = State) ->
+    set_logger_target(indent, lists:duplicate(Depth - 1, "    ")),
+    State#state{depth = Depth - 1}.
 
-%% @doc Reverts back from Syntax Tools format to Erlang forms.
-%%
-%% Accepts a list of forms, or a single form.
-%%
-%% Copied from `parse_trans:revert_form/1' and slightly modified. The original
-%% also handles a bug in R16B03, but that is ancient history now.
-revert(Forms) when is_list(Forms) ->
-    lists:map(fun revert/1, Forms);
-revert(Form) ->
-    case erl_syntax:revert(Form) of
-        {attribute, Line, Arguments, Tree} when element(1, Tree) == tree ->
-            {attribute, Line, Arguments, erl_syntax:revert(Tree)};
-        Result ->
-            Result
-    end.
-
+%% @private
 get_logger_target() ->
     Default = #{line => none},
     case logger:get_process_metadata() of
@@ -878,6 +992,7 @@ get_logger_target() ->
         Metadata -> maps:get(target, Metadata, Default)
     end.
 
+%% @private
 set_logger_target(#state{file = File, module = Module, transformer = Transformer}) ->
     MFA = merlin_internal:fun_to_mfa(Transformer),
     logger:update_process_metadata(#{
@@ -888,12 +1003,19 @@ set_logger_target(#state{file = File, module = Module, transformer = Transformer
         })
     }).
 
+%% @private
 set_logger_target(Key, Value) ->
     logger:update_process_metadata(#{
         target => maps:put(Key, Value, get_logger_target())
     }).
 
+%% @private
 unset_logger_target(Key) ->
     logger:update_process_metadata(#{
         target => maps:remove(Key, get_logger_target())
     }).
+
+%%%_* Tests ==================================================================
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+-endif.
