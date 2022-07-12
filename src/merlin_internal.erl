@@ -25,6 +25,11 @@
 -endif.
 
 %% @hidden
+-spec 'DEFINE PROCEDURAL MACRO'(
+    file:filename(), erl_anno:line(), module(), atom(), arity(), string(), fun(
+        () -> any()
+    )
+) -> no_return().
 'DEFINE PROCEDURAL MACRO'(
     File,
     Line,
