@@ -57,3 +57,28 @@
         '_'
     )
 ).
+
+-define(quickcheck(Property), ?quickcheck(Property, [])).
+
+-define(quickcheck(Property, Options),
+    case
+        proper:quickcheck(Property, proplists:delete(comment, Options ++ [long_result]))
+    of
+        true ->
+            ok;
+        X__V ->
+            error(
+                {assertEqual, [
+                    {module, ?MODULE},
+                    {line, ?LINE},
+                    {expression, ("proper:quickcheck(" ??Property ", " ??Options ")")},
+                    {expected, true},
+                    {value, X__V}
+                    | case proplists:lookup(comment, Options) of
+                        none -> [];
+                        X__C -> [X__C]
+                    end
+                ]}
+            )
+    end
+).

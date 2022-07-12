@@ -51,6 +51,11 @@
 %%%_* Includes ===============================================================
 -include("log.hrl").
 
+-ifdef(TEST).
+-define(PROPER_NO_IMPORTS, true).
+-include_lib("proper/include/proper.hrl").
+-endif.
+
 %%%_* Macros =================================================================
 -define(else, true).
 
@@ -209,7 +214,7 @@ analyze(ModuleForms) ->
         file => merlin_lib:file(ModuleForms)
     }.
 
-%% @doc Same as @{link analyze/1}, but also extracts and appends any inline
+%% @doc Same as {@link analyze/1}, but also extracts and appends any inline
 %% `-compile' options to the given one.
 -spec analyze([ast()], [compile:option()]) -> {analysis(), [compile:option()]}.
 analyze(ModuleForms, Options) ->
@@ -423,12 +428,12 @@ annotate_form(_, Form, _) ->
 
 %% @private
 resolve_application(Node, Analysis) ->
-    Body = erl_syntax:module_qualifier_body(Node),
-    case erl_syntax:type(Body) of
+    Operator = erl_syntax:application_operator(Node),
+    case erl_syntax:type(Operator) of
         atom ->
             case resolve_application_internal(Node, Analysis) of
                 {ok, Module} ->
-                    Name = erl_syntax:atom_value(Body),
+                    Name = erl_syntax:atom_value(Operator),
                     Arity = length(erl_syntax:application_arguments(Node)),
                     {ok, Module, Name, Arity};
                 dynamic ->
@@ -1035,5 +1040,32 @@ unset_logger_target(Key) ->
 
 %%%_* Tests ==================================================================
 -ifdef(TEST).
+-include("internal.hrl").
 -include_lib("eunit/include/eunit.hrl").
+
+proper_test() ->
+    ?quickcheck(transform_prop()).
+
+transform_prop() ->
+    ?FORALL(
+        ModuleForms,
+        proper_erlang_abstract_code:module(),
+        ?WHENFAIL(
+            begin
+                ?pp(ModuleForms)
+            end,
+            case merl:match(ModuleForms, identity_transform(ModuleForms)) of
+                {ok, Variables} when is_list(Variables) ->
+                    true;
+                _ ->
+                    false
+            end
+        )
+    ).
+
+identity_transform(Forms) ->
+    return(transform(annotate(Forms), fun identity_transformer/3, state)).
+
+identity_transformer(_, _, _) -> continue.
+
 -endif.
