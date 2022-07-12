@@ -808,15 +808,9 @@ maybe_wrap_in_list(Form) ->
 %% @doc Like {@link merlin:return/2}, while also applying the
 %% {@link merl_transform:parse_transform/2. merl parse_transform}.
 return(Result, Options) ->
-    return(fun merl_transform:parse_transform/2, Result, Options).
-
-%% @private
-return(_Fun, {error, _, _} = Result, _Options) ->
-    Result;
-return(Fun, {warnings, Forms, Warnings}, Options) ->
-    {warnings, Fun(Forms, Options), Warnings};
-return(Fun, Forms, Options) ->
-    Fun(merlin:revert(Forms), Options).
+    merlin:then(merlin:return(Result), fun(Forms) ->
+        merl_transform:parse_transform(Forms, Options)
+    end).
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
