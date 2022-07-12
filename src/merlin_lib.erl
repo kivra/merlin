@@ -70,6 +70,12 @@
     new_variables/4
 ]).
 
+-ifdef(TEST).
+-export([
+    reset_variable_counter/0
+]).
+-endif.
+
 %%%_* Types ------------------------------------------------------------------
 -export_type([
     bindings/0,
@@ -941,6 +947,10 @@ test_variable_formatter(Prefix0, Suffix0) ->
     put(Key, N + 1),
     binary_to_atom(iolist_to_binary(io_lib:format("~s~p~s", [Prefix1, N, Suffix1]))).
 
+%% Resets the `test_variable_formatter' counter.
+reset_variable_counter() ->
+    erase('merlin_lib:variable_counter').
+
 file_test() ->
     ?assertEqual("example.erl", file(?EXAMPLE_MODULE_FORMS)).
 
@@ -1175,22 +1185,25 @@ get_ann(Form) ->
     lists:sort(erl_syntax:get_ann(Form)).
 
 add_new_variable_test_() ->
+    reset_variable_counter(),
     Bindings0 = #{env => ordsets:new(), bound => ordsets:new(), free => ordsets:new()},
-    maps:to_list(#{
-        "binding" => fun() ->
-            Result0 = add_new_variable(Bindings0),
-            ?assertMatch(
-                {'__Var1__', #{env := [], bound := ['__Var1__'], free := []}}, Result0
-            ),
-            {_, Bindings1} = Result0,
-            Result1 = add_new_variable(Bindings1),
-            ?assertMatch(
-                {'__Var2__', #{
-                    env := [], bound := ['__Var1__', '__Var2__'], free := []
-                }},
-                Result1
-            )
-        end
-    }).
+    {setup, fun reset_variable_counter/0,
+        maps:to_list(#{
+            "binding" => fun() ->
+                Result0 = add_new_variable(Bindings0),
+                ?assertMatch(
+                    {'__Var1__', #{env := [], bound := ['__Var1__'], free := []}},
+                    Result0
+                ),
+                {_, Bindings1} = Result0,
+                Result1 = add_new_variable(Bindings1),
+                ?assertMatch(
+                    {'__Var2__', #{
+                        env := [], bound := ['__Var1__', '__Var2__'], free := []
+                    }},
+                    Result1
+                )
+            end
+        })}.
 
 -endif.
