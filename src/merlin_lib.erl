@@ -954,7 +954,7 @@ module_test_() ->
 
 module_form_test_() ->
     maps:to_list(#{
-        "when -module exists" => ?_assertMerlEqual(
+        "when -module exists" => ?_assertMerlMatch(
             ?Q("-module(example)."), module_form(?EXAMPLE_MODULE_FORMS)
         ),
         "when -module is missing" => ?_assertEqual(
@@ -1084,7 +1084,6 @@ find_source_test_() ->
             file:delete(filename:join(Ebin, "example.beam")),
             ?assertEqual(undefined, find_source(example))
         end
-
     }).
 
 compile_and_load_example_module(SourceFile, Ebin, Options) ->

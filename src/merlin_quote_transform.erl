@@ -875,7 +875,7 @@ has_quote_pattern_test_() ->
             %% Strip away the module forms
             ?assertMatch([_, _, _, _], Transformed),
             [_, _, _, TransformedFunc] = Transformed,
-            ?assertMerlEqual(Expected, TransformedFunc)
+            ?assertMerlMatch(Expected, TransformedFunc)
         end
     }
 ).

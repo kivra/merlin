@@ -39,32 +39,32 @@ end).
 -define(_assertMerlMatch(Guard, Expr), ?_test(?assertMerlMatch(Guard, Expr))).
 
 %% Merl compatible version of ?assertEqual/2
-%% For use with merls `?Q/1' macro, `?assertMerlEqual(?Q(...), Expr)'
+%% For use with an existing/dynamic `Form', `?assertMerlEqual(Form, Expr)'
 %%
 %% On failure it pretty prints both the expected and actual syntax trees.
 %% It also reverts both the {@link merl:tree/1. expected} and
 %% {@link merlin_revert/1. actual} syntax trees to make it easier to compare.
 -define(assertMerlEqual(Expected, Expr),
-    ((fun(X__Value) ->
-        case X__Value of
-            Expected ->
+    ((fun(X__Expected, X__Value) ->
+        case merl:match(X__Expected, X__Value) of
+            {ok, X__Variables} when is_list(X__Variables) ->
                 ok;
-            _ ->
+            error ->
                 io:format("Expected~n~s~n~nto equal~n~s~n", [
                     merlin_merl:format(X__Value),
-                    merlin_merl:format(Expected)
+                    merlin_merl:format(X__Expected)
                 ]),
                 erlang:error(
                     {assertEqual, [
                         {module, ?MODULE},
                         {line, ?LINE},
                         {expression, ??Expr},
-                        {expected, merl:tree(Expected)},
+                        {expected, merl:tree(X__Expected)},
                         {value, merlin:revert(X__Value)}
                     ]}
                 )
         end
-    end)(Expr))
+    end)(Expected, Expr))
 ).
 -define(_assertMerlEqual(Expected, Expr), ?_test(?assertMerlEqual(Expected, Expr))).
 
