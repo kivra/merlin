@@ -1,11 +1,15 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%% @doc Helpers for working with {@link erl_syntax:syntaxTree/0}.
 %%% Similar to {@link erl_syntax_lib}, but with a different set of helpers,
 %%% and a preference for returning maps over proplists.
 %%% @end
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%%%_* Module declaration =====================================================
 -module(merlin_lib).
 
--include("internal.hrl").
-
+%%%_* Exports ================================================================
+%%%_ * API -------------------------------------------------------------------
 -export([
     file/1,
     module/1,
@@ -66,70 +70,77 @@
     new_variables/4
 ]).
 
+%%%_* Types ------------------------------------------------------------------
 -export_type([
     bindings/0,
     bindings_or_form/0
 ]).
 
--define(else, true).
+%%%_* Includes ===============================================================
+-include("internal.hrl").
 
--ifndef(TEST).
--define(variable_formatter, fun(N) ->
-    binary_to_atom(iolist_to_binary(io_lib:format("~s~p~s", [Prefix, N, Suffix])))
-end).
--else.
-%% During testing we ignore the randomly generated N, and use the process
-%% dictionary to keep track of the next number. This is to allow writing
-%% deterministic tests.
-%%
-%% It use multiple counters, one per prefix/suffix combination. This makes it
-%% much easier to guess what the automatic variable will be.
--define(variable_formatter, fun(_N) ->
-    test_variable_formatter(Prefix, Suffix)
-end).
-
-test_variable_formatter(Prefix0, Suffix0) ->
-    Prefix1 = iolist_to_binary(io_lib:format("~s", [Prefix0])),
-    Suffix1 = iolist_to_binary(io_lib:format("~s", [Suffix0])),
-    Key = {'merlin_lib:variable_counter', Prefix1, Suffix1},
-    N =
-        case erlang:get(Key) of
-            undefined -> 1;
-            Number -> Number
-        end,
-    put(Key, N + 1),
-    binary_to_atom(iolist_to_binary(io_lib:format("~s~p~s", [Prefix1, N, Suffix1]))).
--endif.
+%%%_* Macros =================================================================
+-define(ERL_ANNO_KEYS, [line, column, file, generated, record, text]).
 
 -define(is_binding_type(Type),
     (Type =:= bound orelse Type =:= env orelse Type =:= free)
 ).
 
--define(ERL_ANNO_KEYS, [line, column, file, generated, record, text]).
+-ifndef(TEST).
+-define(variable_name_formatting_fun(Prefix, Suffix), fun(N) ->
+    binary_to_atom(iolist_to_binary(io_lib:format("~s~p~s", [Prefix, N, Suffix])))
+end).
+-else.
+-define(variable_name_formatting_fun(Prefix, Suffix), fun(_N) ->
+    test_variable_formatter(Prefix, Suffix)
+end).
+-endif.
+
+-define(attribute_filter(Name), fun(Node) ->
+    erl_syntax:type(Node) == attribute andalso
+        value(erl_syntax:attribute_name(Node)) == Name
+end).
+
+%%%_* Types ==================================================================
 
 -type variable() :: atom() | merlin:ast().
 
 -type set() :: set(variable()).
+%% Represents a {@link set()} of {@link variable(). variables}.
+
 -type set(T) :: sets:set(T) | ordsets:ordset(T).
+%% Represents either of the two builtin `set' data structures in OTP.
 
 -type bindings() :: #{
     env := ordsets:set(variable()),
     bound := ordsets:set(variable()),
     free := ordsets:set(variable())
 }.
+%% Represents the current bindings for a form
 
--type bindings_or_form() :: bindings() | merlin:ast().
+%% @see annotate_bindings/1
 
 -type binding_type() :: env | bound | free.
+%% Represents the three types of bindings.
+%% <dl>
+%% <dt>`env'</dt>
+%% <dd>Bindings from the surrounding scope, i.e. a `fun''s closure.</dd>
+%% <dt>`bound'</dt>
+%% <dd>Bindings with value.</dd>
+%% <dt>`free'</dt>
+%% <dd>Bindings without a value. It's a compile time error to try to access them.</dd>
+%% </dl>
 
-%% A bit dirty to know about the internal structure like this, but
-%% {@link erl_syntax:syntaxTree/0} also includes the vanilla AST and dialyser
-%% doesn't always approve of that.
+-type bindings_or_form() :: bindings() | merlin:ast().
+%% @see get_bindings/1
+
 -type erl_syntax_ast() ::
     {tree, any(), any(), any()}
     | {wrapper, any(), any(), any()}.
+%% A bit dirty to know about the internal structure like this, but
+%% {@link erl_syntax:syntaxTree/0} also includes the vanilla AST and dialyser
+%% doesn't always approve of that.
 
-%% Copied from erl_syntax
 -type erl_parse() ::
     erl_parse:abstract_clause()
     | erl_parse:abstract_expr()
@@ -139,6 +150,7 @@ test_variable_formatter(Prefix0, Suffix0) ->
     | erl_parse:af_binelement(term())
     | erl_parse:af_generator()
     | erl_parse:af_remote_function().
+%% Copied from erl_syntax
 
 -type erl_annotation() ::
     {line, erl_anno:line()}
@@ -148,11 +160,20 @@ test_variable_formatter(Prefix0, Suffix0) ->
     | {location, erl_anno:location()}
     | {record, boolean()}
     | {text, string()}.
+%% Reprensent a single builtin {@link erl_anno. annotation property}.
 
 -type erl_annotations() :: [erl_annotation()].
+%% Represents a list of {@link erl_annotation(). annotations}.
+%%
+%% This is also the internal format of {@link erl_anno} once more then
+%% {@link erl_anno:line()} and/or {@link erl_anno:line()} has been set.
 
 -type erl_annotation_key() ::
     line | column | file | generated | location | record | text.
+%% The different types of builtin {@link erl_anno. annotations}.
+
+%%%_* Code ===================================================================
+%%%_ * API -------------------------------------------------------------------
 
 %% @doc Returns the filename for the first `-file' attribute in `Forms', or
 %% `""' if not found.
@@ -187,17 +208,40 @@ module_form(Forms) ->
             undefined
     end.
 
-%% @doc Updates the given form using the given groups or another form.
+%% @doc Updates the given form using the given groups or subtrees of another
+%% form.
+%%
 %% This is a generalisation of {@link erl_syntax:update_tree/2}.
+-spec update_tree(merlin:ast(), [[merlin:ast()]] | merlin:ast()) -> merlin:ast().
 update_tree(Node, Groups) when is_list(Groups) ->
     erl_syntax:update_tree(Node, Groups);
 update_tree(Node, Form) when is_tuple(Form) ->
     ?assertNodeType(Node, ?assertIsForm(Form)),
     erl_syntax:update_tree(Node, erl_syntax:subtrees(Form)).
 
+%% @doc Returns the value of the given literal node as an Erlang term.
+%%
+%% Raises `{badvalue, Node}' if the given `Node' is not an literal node.
+-spec value(merlin:ast()) -> term().
+value(Node) ->
+    case erl_syntax:is_literal(Node) of
+        true ->
+            case erl_syntax:type(Node) of
+                atom -> erl_syntax:atom_value(Node);
+                integer -> erl_syntax:integer_value(Node);
+                float -> erl_syntax:float_value(Node);
+                char -> erl_syntax:char_value(Node);
+                string -> erl_syntax:string_value(Node);
+                _ -> error({badvalue, Node})
+            end;
+        false ->
+            error({badvalue, Node})
+    end.
+
 %% @doc Callback for formatting error messages from this module
 %%
 %% @see erl_parse:format_error/1
+-spec format_error(term()) -> string().
 format_error(Message0) ->
     Message1 =
         case io_lib:deep_char_list(Message0) of
@@ -211,6 +255,14 @@ format_error(Message0) ->
         nomatch -> Message1
     end.
 
+%% @doc Callback for formatting error messages from this module.
+%%
+%% See <a href="https://www.erlang.org/eeps/eep-0054">EEP 54</a>
+-spec format_error(Reason, erlang:stacktrace()) -> ErrorInfo when
+    Reason :: term(),
+    ErrorInfo :: #{
+        pos_integer() | general | reason => string()
+    }.
 format_error(badarg, [{?MODULE, remove_annotation, [_Form, line], _Location} | _]) ->
     #{2 => "can't remove the line annotation"};
 format_error(_, _) ->
@@ -226,7 +278,7 @@ format_error(_, _) ->
     Reason :: term(),
     Stacktrace :: list({module(), atom(), arity(), [{atom(), term()}]}),
     Node :: merlin:ast().
-into_error_marker(Reason, [{_Module, _Function, _Arity, Location} | _]) ->
+into_error_marker(Reason, [{_Module, _Function, _ArityOrArguments, Location} | _]) ->
     File = keyfind(Location, file, none),
     Line = keyfind(Location, line, 0),
     {error, {File, {Line, ?MODULE, Reason}}};
@@ -235,21 +287,9 @@ into_error_marker(Reason, Node) when is_tuple(Node) ->
     Position = erl_syntax:get_pos(Node),
     {error, {File, {Position, ?MODULE, Reason}}}.
 
-%% @private
-%% @doc Like {@link lists:keyfind/3} with a default value.
-keyfind(List, Key, Default) ->
-    case lists:keyfind(Key, 1, List) of
-        {Key, Value} ->
-            Value;
-        false ->
-            case get(Key) of
-                undefined -> Default;
-                Value -> Value
-            end
-    end.
-
 %% @doc Returns the path to the source for the given module, or `undefined' if
 %% it can't be found.
+-spec find_source(module()) -> file:filename() | undefined.
 find_source(Module) when is_atom(Module) ->
     MaybeSource =
         case code:get_object_code(Module) of
@@ -271,7 +311,8 @@ find_source(Module) when is_atom(Module) ->
 
 %% @doc Returns the annotation for the given form,
 %% or raises `{badkey, Annotation}' if not found.
-get_annotation(Form, Annotation) ->
+-spec get_annotation(merlin:ast(), atom()) -> term().
+get_annotation(Form, Annotation) when is_atom(Annotation) ->
     case is_erl_anno(Annotation) of
         true ->
             Anno = erl_syntax:get_pos(Form),
@@ -283,19 +324,50 @@ get_annotation(Form, Annotation) ->
 
 %% @doc Returns the annotation for the given form,
 %% or Default if not found.
-get_annotation(Form, Annotation, Default) ->
+-spec get_annotation(merlin:ast(), atom(), Default) -> Default.
+get_annotation(Form, Annotation, Default) when is_atom(Annotation) ->
     Annotations = get_annotations(Form),
     maps:get(Annotation, Annotations, Default).
 
 %% @doc Returns all annotations associated with the given `Form' as a map.
+-spec get_annotations(merlin:ast()) -> #{atom() := term()}.
 get_annotations(Form) ->
     {ErlAnno, ErlSyntax} = get_annotations_internal(Form),
     maps:merge(maps:from_list(ErlAnno), ErlSyntax).
+
+%% @doc Returns the given form without the given annotation.
+%%
+%% You may not remove the `line', as it must always be present.
+%% You may remove annotations that are not present, if which case the original
+%% form is returned.
+-spec remove_annotation(merlin:ast(), atom()) -> merlin:ast().
+remove_annotation(Form, line) ->
+    error(badarg, [Form, line], [{error_info, #{}}]);
+remove_annotation(Form, Annotation) when is_atom(Annotation) ->
+    case is_erl_anno(Annotation) of
+        true ->
+            ErlAnnotations0 = erl_syntax:get_pos(Form),
+            case get_anno(ErlAnnotations0, Annotation) of
+                undefined ->
+                    %% The annotation to remove is already missing
+                    Form;
+                _ ->
+                    %% There's no remove annotation in erl_anno,
+                    %% instead we set all _other_ annotations
+                    ErlAnnotations1 = lists:keydelete(Annotation, 1, ErlAnnotations0),
+                    set_erl_anno(Form, ErlAnnotations1)
+            end;
+        false ->
+            ErlSyntax0 = erl_syntax:get_ann(Form),
+            ErlSyntax1 = lists:keydelete(Annotation, 1, ErlSyntax0),
+            erl_syntax:set_ann(Form, ErlSyntax1)
+    end.
 
 %% @doc Returns the given form with the given annotation set to the given
 %% value.
 %% When given an erl_anno annotation and erl_parse form, it returns a erl_parse
 %% form, otherwise an erl_syntax form.
+-spec set_annotation(merlin:ast(), atom(), term()) -> merlin:ast().
 set_annotation(Form, Annotation, Value) ->
     Tuple = {Annotation, Value},
     case is_erl_anno(Annotation) of
@@ -309,28 +381,12 @@ set_annotation(Form, Annotation, Value) ->
             erl_syntax:set_ann(Form, ErlSyntax1)
     end.
 
-%% @private
-set_pos(Form, Anno) ->
-    case is_erl_syntax(Form) of
-        true ->
-            erl_syntax:set_pos(Form, Anno);
-        false ->
-            setelement(2, Form, Anno)
-    end.
-
-%% @private
--spec is_erl_syntax
-    (erl_syntax_ast()) -> true;
-    (erl_parse()) -> false.
-is_erl_syntax(Form) when is_tuple(Form) ->
-    Type = element(1, Form),
-    Type =:= tree orelse Type =:= wrapper.
-
 %% @doc Returns the given form with the given annotations.
 %%
 %% These may be {@link erl_parse} annotations, user annotations, or a mix of
 %% both. The given annotations overwrite any already present. To preseve
 %% existing ones use {@link update_annotations/2} instead.
+-spec set_annotations(merlin:ast(), #{atom() := term()}) -> merlin:ast().
 set_annotations(Form0, Annotations) when is_map(Annotations) ->
     {ErlAnnotations, ErlSyntax} = lists:partition(
         fun is_erl_anno/1,
@@ -342,32 +398,6 @@ set_annotations(Form0, Annotations) when is_map(Annotations) ->
         _ -> erl_syntax:set_ann(Form1, ErlSyntax)
     end.
 
-%% @doc Returns the given form without the given annotation.
-%%
-%% You may not remove the `line', as it must always be present.
-%% You may remove annotations that are not present, if which case the original
-%% form is returned.
-remove_annotation(Form, line) ->
-    error(badarg, [Form, line], [{error_info, #{}}]);
-remove_annotation(Form, Annotation) ->
-    case is_erl_anno(Annotation) of
-        true ->
-            ErlAnnotations = erl_syntax:get_pos(Form),
-            case get_anno(ErlAnnotations, Annotation) of
-                undefined ->
-                    %% The annotation to remove is already missing
-                    Form;
-                _ ->
-                    %% There's no remove annotation in erl_anno,
-                    %% instead we set all _other_ annotations
-                    set_erl_anno(Form, ErlAnnotations)
-            end;
-        false ->
-            ErlSyntax0 = erl_syntax:get_ann(Form),
-            ErlSyntax1 = lists:keydelete(Annotation, 1, ErlSyntax0),
-            erl_syntax:set_ann(Form, ErlSyntax1)
-    end.
-
 %% @doc Returns the given form with the given annotations merged in.
 %% It separates {@link erl_anno} annotations from user once, which means if
 %% you set `line' or `file', you update the position/location of the form,
@@ -376,6 +406,7 @@ remove_annotation(Form, Annotation) ->
 %% @see erl_anno
 %% @see erl_syntax:get_pos/1
 %% @see erl_syntax:get_ann/1
+-spec update_annotations(merlin:ast(), #{atom() := term()}) -> erl_syntax_ast().
 update_annotations(Form0, NewAnnotations) when is_map(NewAnnotations) ->
     {ErlAnnotations, ErlSyntax} = get_annotations_internal(Form0),
     {NewErlAnnotations, NewErlSyntax} = lists:partition(
@@ -387,86 +418,13 @@ update_annotations(Form0, NewAnnotations) when is_map(NewAnnotations) ->
     Form2 = erl_syntax:set_ann(Form1, maps:to_list(UpdatedErlSyntax)),
     Form2.
 
-%% @private
-%% @doc Returns all annotations from {@link erl_anno} and {@link erl_syntax}.
-get_annotations_internal(Form) ->
-    ?assertIsForm(Form),
-    Anno = erl_syntax:get_pos(Form),
-    ErlAnno = [
-        {Name, get_anno(Name, Anno)}
-     || Name <- ?ERL_ANNO_KEYS,
-        get_anno(Name, Anno) =/= undefined
-    ],
-    ErlSyntax = maps:from_list(erl_syntax:get_ann(Form)),
-    ?assertEqual(
-        [],
-        ordsets:intersection(
-            ?ERL_ANNO_KEYS,
-            ordsets:from_list(maps:keys(ErlSyntax))
-        ),
-        "erl_anno keys must not be saved as erl_syntax annotations"
-    ),
-    {ErlAnno, ErlSyntax}.
-
-%% @private
--spec is_erl_anno
-    (erl_annotation()) -> true;
-    (erl_annotation_key()) -> true;
-    (any()) -> false.
-is_erl_anno(line) -> true;
-is_erl_anno(column) -> true;
-is_erl_anno(file) -> true;
-is_erl_anno(generated) -> true;
-is_erl_anno(location) -> true;
-is_erl_anno(record) -> true;
-is_erl_anno(text) -> true;
-is_erl_anno({Key, _Value}) when is_atom(Key) -> is_erl_anno(Key);
-is_erl_anno(_) -> false.
-
-%% @private
-get_anno(line, Anno) -> erl_anno:line(Anno);
-get_anno(column, Anno) -> erl_anno:column(Anno);
-get_anno(file, Anno) -> erl_anno:file(Anno);
-get_anno(generated, Anno) -> erl_anno:generated(Anno) orelse undefined;
-get_anno(location, Anno) -> erl_anno:location(Anno);
-get_anno(record, Anno) -> erl_anno:record(Anno) orelse undefined;
-get_anno(text, Anno) -> erl_anno:text(Anno);
-get_anno(_, _) -> undefined.
-
-%% @private
--spec set_erl_anno(merlin:ast(), erl_annotations()) -> erl_syntax_ast().
-set_erl_anno(Form, []) ->
-    Form;
-set_erl_anno(Form, ErlAnnotations) ->
-    Anno0 = erl_anno:new(erl_anno:line(erl_syntax:get_pos(Form))),
-    Anno1 = lists:foldl(fun set_anno/2, Anno0, ErlAnnotations),
-    set_pos(Form, Anno1).
-
-%% @private
--spec set_anno(erl_annotation(), erl_anno:anno()) -> erl_anno:anno().
-set_anno({line, Line}, Anno) when is_integer(Line) ->
-    erl_anno:set_line(Line, Anno);
-set_anno({column, Column}, Anno) when is_integer(Column) ->
-    Line = erl_anno:line(Anno),
-    erl_anno:set_location({Line, Column}, Anno);
-set_anno({file, File}, Anno) when is_list(File) ->
-    erl_anno:set_file(File, Anno);
-set_anno({generated, Generated}, Anno) when is_boolean(Generated) ->
-    erl_anno:set_generated(Generated, Anno);
-set_anno({location, Location}, Anno) ->
-    erl_anno:set_location(Location, Anno);
-set_anno({record, Record}, Anno) when is_boolean(Record) ->
-    erl_anno:set_record(Record, Anno);
-set_anno({text, Text}, Anno) when is_list(Text) ->
-    erl_anno:set_text(Text, Anno).
-
 %% @doc Returns the argument to the first module attribute with the given
 %% name, or Default if not found.
 -spec get_attribute(merlin:ast() | [merlin:ast()], atom(), term()) -> term().
 get_attribute(Tree, Name, Default) when is_tuple(Tree) ->
     get_attribute(lists:flatten(erl_syntax:subtrees(Tree)), Name, Default);
 get_attribute(Tree, Name, Default) ->
-    case lists:search(attribute_filter(Name), Tree) of
+    case lists:search(?attribute_filter(Name), Tree) of
         {value, Node} -> erl_syntax:attribute_arguments(Node);
         false -> Default
     end.
@@ -475,6 +433,7 @@ get_attribute(Tree, Name, Default) ->
 %% given list of forms or subtrees of the given form.
 %%
 %% Returns the empty list if no such attributes are found.
+-spec get_attributes(merlin:ast() | [merlin:ast()], atom()) -> term().
 get_attributes(Tree, Name) when is_tuple(Tree) ->
     get_attributes(lists:flatten(erl_syntax:subtrees(Tree)), Name);
 get_attributes(Tree, Name) ->
@@ -485,158 +444,37 @@ get_attributes(Tree, Name) ->
 
 %% @doc Returns all attributes with the given name in the given list of forms
 %% or subtrees of the given form.
+-spec get_attribute_forms(merlin:ast() | [merlin:ast()], atom()) -> merlin:ast().
 get_attribute_forms(Tree, Name) when is_tuple(Tree) ->
     get_attribute_forms(lists:flatten(erl_syntax:subtrees(Tree)), Name);
 get_attribute_forms(Tree, Name) ->
-    lists:filter(attribute_filter(Name), Tree).
+    lists:filter(?attribute_filter(Name), Tree).
 
-%% @private
-attribute_filter(Name) ->
-    fun(Node) ->
-        erl_syntax:type(Node) == attribute andalso
-            value(erl_syntax:attribute_name(Node)) == Name
-    end.
+%% @doc Adds the given binding to the existing ones.
+%% See {@link add_bindings/2}.
+-spec add_binding
+    (bindings(), variable()) -> bindings();
+    (merlin:ast(), variable()) -> erl_syntax_ast().
+add_binding(BindingsOrForm, NewBinding) ->
+    add_bindings(BindingsOrForm, [NewBinding]).
 
-%% @doc Returns the value of the given literal node as an Erlang term.
+%% @doc Adds the given bindings to the existing ones.
+%% Accepts the same input as {@link get_bindings}.
 %%
-%% Raises `{badvalue, Node}' if the given `Node' is not an literal node.
-value(Node) ->
-    case erl_syntax:is_literal(Node) of
-        true ->
-            case erl_syntax:type(Node) of
-                atom -> erl_syntax:atom_value(Node);
-                integer -> erl_syntax:integer_value(Node);
-                float -> erl_syntax:float_value(Node);
-                char -> erl_syntax:char_value(Node);
-                string -> erl_syntax:string_value(Node);
-                _ -> error({badvalue, Node})
-            end;
-        false ->
-            error({badvalue, Node})
-    end.
-
-%% @doc Same as {@link add_new_variable/3} with default prefix and suffix.
-%%
-%% @see new_variable/3
-add_new_variable(BindingsOrForm) ->
-    Var = new_variable(BindingsOrForm),
-    {Var, add_binding(BindingsOrForm, Var)}.
-
-%% @doc Same as {@link add_new_variable/3} with the given prefix and default
-%% suffix.
-%%
-%% @see new_variable/3
-add_new_variable(BindingsOrForm, Prefix) ->
-    Var = new_variable(BindingsOrForm, Prefix),
-    {Var, add_binding(BindingsOrForm, Var)}.
-
-%% @doc Creates a new variable using {@link new_variable/3} and adds it to the
-%% given form or bindings.
-%%
-%% @see new_variable/3
-add_new_variable(BindingsOrForm, Prefix, Suffix) ->
-    Var = new_variable(BindingsOrForm, Prefix, Suffix),
-    {Var, add_binding(BindingsOrForm, Var)}.
-
-%% @doc Same as {@link new_variables/3} with default prefix and suffix.
-%%
-%% @see new_variable/3
-add_new_variables(BindingsOrForm, Total) ->
-    Vars0 = new_variables(BindingsOrForm, Total),
-    Vars1 = maybe_form(BindingsOrForm, Vars0),
-    {Vars1, add_bindings(BindingsOrForm, Vars0)}.
-
-%% @doc Same as {@link new_variable/3} with the given prefix and default
-%% suffix.
-%%
-%% @see new_variable/3
-add_new_variables(BindingsOrForm, Total, Prefix) ->
-    Vars0 = new_variables(BindingsOrForm, Total, Prefix),
-    Vars1 = maybe_form(BindingsOrForm, Vars0),
-    {Vars1, add_bindings(BindingsOrForm, Vars0)}.
-
-%% @doc Creates `Total' number of new variables using {@link new_variables/4}
-%% and adds it to the given form or bindings.
-%%
-%% @see new_variable/3
-add_new_variables(BindingsOrForm, Total, Prefix, Suffix) ->
-    Vars0 = new_variables(BindingsOrForm, Total, Prefix, Suffix),
-    Vars1 = maybe_form(BindingsOrForm, Vars0),
-    {Vars1, add_bindings(BindingsOrForm, Vars0)}.
-
-%% @doc Same as {@link new_variable/3} with default prefix and suffix.
-new_variable(BindingsOrForm) ->
-    new_variable(BindingsOrForm, "__Var", "__").
-
-%% @doc Same as {@link new_variable/3} with the given prefix and default
-%% suffix.
-new_variable(BindingsOrForm, Prefix) ->
-    new_variable(BindingsOrForm, Prefix, "").
-
-%% @doc Returns a new variable guaranteed not to be in the given bindings, or
-%% the bindings associated with the given form.
-%%
-%% If given a set of existing bindings, it will return an atom, if given a
-%% form it will return a new {@link erl_syntax:variable/1. variable}. That
-%% variable will have the {@link erl_anno:generated/1. generated} flag set.
-%%
-%% The resulting variable will be on the format `Prefix<N>Suffix', where `N'
-%% is some small number. Prefix defaults to `__Var', and suffix to `__'.
-%%
-%% If `TEST' is set during compilation, the numbers will be deterministically
-%% increment from 1, otherwise they are random.
-%%
-%% @see erl_syntax_lib:new_variable_name/1
-new_variable(BindingsOrForm, Prefix, Suffix) ->
-    Set = into_set(BindingsOrForm),
-    Name = erl_syntax_lib:new_variable_name(?variable_formatter, Set),
-    hd(maybe_form(BindingsOrForm, [Name])).
-
-%% @doc Same as {@link new_variables/4} with default prefix and suffix.
-new_variables(Total) when is_integer(Total) ->
-    new_variables(ordsets:new(), Total).
-
-%% @doc Same as {@link new_variables/4} with the given prefix and default
-%% suffix.
-new_variables(BindingsOrForm, Total) ->
-    new_variables(BindingsOrForm, Total, "__Var", "__").
-
-%% @doc Same as {@link new_variables/4} with the given prefix and suffix.
-new_variables(BindingsOrForm, Total, Prefix) ->
-    new_variables(BindingsOrForm, Total, Prefix, "").
-
-%% @doc Returns `Total' number of new variables like {@link new_variable/3}.
-%%
-%% @see erl_syntax_lib:new_variable_names/3
-new_variables(BindingsOrForm, Total, Prefix, Suffix) ->
-    Set = into_set(BindingsOrForm),
-    Vars = erl_syntax_lib:new_variable_names(Total, ?variable_formatter, Set),
-    maybe_form(BindingsOrForm, Vars).
-
-%% @private
-maybe_form(Bindings, Variables) when is_map(Bindings) orelse is_list(Bindings) ->
-    ordsets:from_list(Variables);
-maybe_form(Form, Variables) ->
-    ?assertIsForm(Form),
-    [var(Form, Name) || Name <- Variables].
-
-%% @private
--spec var(merlin:ast(), variable()) -> merlin:ast().
-var(Form, Name) when is_atom(Name) ->
-    set_annotation(
-        erl_syntax:copy_attrs(Form, erl_syntax:variable(Name)),
-        generated,
-        true
-    );
-var(Form, Var) when is_tuple(Form) ->
-    erl_syntax:copy_attrs(Form, Var).
-
-%% @private
--spec var_name(variable()) -> atom().
-var_name(Name) when is_atom(Name) ->
-    Name;
-var_name(Form) when is_tuple(Form) ->
-    erl_syntax:variable_name(Form).
+%% When given a form, it updates the bindings on that form, see
+%% {@link merlin:annotate/2} for more info.
+%% When given a map of bindings as returned by {@link get_bindings_with_type},
+%% it updates the `free' and `bound' fields as appropriate.
+-spec add_bindings
+    (bindings(), set()) -> bindings();
+    (merlin:ast(), set()) -> erl_syntax_ast().
+add_bindings(#{env := _, bound := _, free := _} = Bindings, NewBindings) ->
+    merge_bindings(Bindings, NewBindings);
+add_bindings(Form, NewBindings) when is_tuple(Form) ->
+    Bindings0 = get_annotations(Form),
+    Bindings1 = maps:merge(#{env => [], bound => [], free => []}, Bindings0),
+    Bindings2 = merge_bindings(Bindings1, NewBindings),
+    update_annotations(Form, Bindings2).
 
 %% @doc Annotates the given form or forms using
 %% {@link erl_syntax_lib:annotate_bindings/2}.
@@ -744,33 +582,265 @@ get_bindings_with_type(#{bound := Bound, env := Env, free := Free}) ->
 get_bindings_with_type(Form) when is_tuple(Form) ->
     get_bindings_with_type(get_annotations(Form)).
 
-%% @doc Adds the given binding to the existing ones.
-%% See {@link add_bindings/2}.
--spec add_binding
-    (bindings(), variable()) -> bindings();
-    (merlin:ast(), variable()) -> erl_syntax_ast().
-add_binding(BindingsOrForm, NewBinding) ->
-    add_bindings(BindingsOrForm, [NewBinding]).
-
-%% @doc Adds the given bindings to the existing ones.
-%% Accepts the same input as {@link get_bindings}.
+%% @doc Same as {@link add_new_variable/3} with default prefix and suffix.
 %%
-%% When given a form, it updates the bindings on that form, see
-%% {@link merlin:annotate/2} for more info.
-%% When given a map of bindings as returned by {@link get_bindings_with_type},
-%% it updates the `free' and `bound' fields as appropriate.
--spec add_bindings
-    (bindings(), set()) -> bindings();
-    (merlin:ast(), set()) -> erl_syntax_ast().
-add_bindings(#{env := _, bound := _, free := _} = Bindings, NewBindings) ->
-    merge_bindings(Bindings, NewBindings);
-add_bindings(Form, NewBindings) when is_tuple(Form) ->
-    Bindings0 = get_annotations(Form),
-    Bindings1 = maps:merge(#{env => [], bound => [], free => []}, Bindings0),
-    Bindings2 = merge_bindings(Bindings1, NewBindings),
-    update_annotations(Form, Bindings2).
+%% @see new_variable/3
+-spec add_new_variable(BindingsOrForm) -> {variable(), BindingsOrForm} when
+    BindingsOrForm :: bindings_or_form().
+add_new_variable(BindingsOrForm) ->
+    Var = new_variable(BindingsOrForm),
+    {Var, add_binding(BindingsOrForm, Var)}.
+
+%% @doc Same as {@link add_new_variable/3} with the given prefix and default
+%% suffix.
+%%
+%% @see new_variable/3
+-spec add_new_variable(BindingsOrForm, string()) -> {variable(), BindingsOrForm} when
+    BindingsOrForm :: bindings_or_form().
+add_new_variable(BindingsOrForm, Prefix) ->
+    Var = new_variable(BindingsOrForm, Prefix),
+    {Var, add_binding(BindingsOrForm, Var)}.
+
+%% @doc Creates a new variable using {@link new_variable/3} and adds it to the
+%% given form or bindings.
+%%
+%% @see new_variable/3
+-spec add_new_variable(BindingsOrForm, string(), string()) ->
+    {variable(), BindingsOrForm}
+when
+    BindingsOrForm :: bindings_or_form().
+add_new_variable(BindingsOrForm, Prefix, Suffix) ->
+    Var = new_variable(BindingsOrForm, Prefix, Suffix),
+    {Var, add_binding(BindingsOrForm, Var)}.
+
+%% @doc Same as {@link new_variables/3} with default prefix and suffix.
+%%
+%% @see new_variable/3
+-spec add_new_variables(BindingsOrForm, pos_integer()) ->
+    {[variable()], BindingsOrForm}
+when
+    BindingsOrForm :: bindings_or_form().
+add_new_variables(BindingsOrForm, Total) ->
+    Vars0 = new_variables(BindingsOrForm, Total),
+    Vars1 = maybe_form(BindingsOrForm, Vars0),
+    {Vars1, add_bindings(BindingsOrForm, Vars0)}.
+
+%% @doc Same as {@link new_variable/3} with the given prefix and default
+%% suffix.
+%%
+%% @see new_variable/3
+-spec add_new_variables(BindingsOrForm, pos_integer(), string()) ->
+    {[variable()], BindingsOrForm}
+when
+    BindingsOrForm :: bindings_or_form().
+add_new_variables(BindingsOrForm, Total, Prefix) ->
+    Vars0 = new_variables(BindingsOrForm, Total, Prefix),
+    Vars1 = maybe_form(BindingsOrForm, Vars0),
+    {Vars1, add_bindings(BindingsOrForm, Vars0)}.
+
+%% @doc Creates `Total' number of new variables using {@link new_variables/4}
+%% and adds it to the given form or bindings.
+%%
+%% @see new_variable/3
+-spec add_new_variables(BindingsOrForm, pos_integer(), string(), string()) ->
+    {[variable()], BindingsOrForm}
+when
+    BindingsOrForm :: bindings_or_form().
+add_new_variables(BindingsOrForm, Total, Prefix, Suffix) ->
+    Vars0 = new_variables(BindingsOrForm, Total, Prefix, Suffix),
+    Vars1 = maybe_form(BindingsOrForm, Vars0),
+    {Vars1, add_bindings(BindingsOrForm, Vars0)}.
+
+%% @doc Same as {@link new_variable/3} with default prefix and suffix.
+-spec new_variable(bindings_or_form()) -> variable().
+new_variable(BindingsOrForm) ->
+    new_variable(BindingsOrForm, "__Var", "__").
+
+%% @doc Same as {@link new_variable/3} with the given prefix and default
+%% suffix.
+-spec new_variable(bindings_or_form(), string()) -> variable().
+new_variable(BindingsOrForm, Prefix) ->
+    new_variable(BindingsOrForm, Prefix, "").
+
+%% @doc Returns a new variable guaranteed not to be in the given bindings, or
+%% the bindings associated with the given form.
+%%
+%% If given a set of existing bindings, it will return an atom, if given a
+%% form it will return a new {@link erl_syntax:variable/1. variable}. That
+%% variable will have the {@link erl_anno:generated/1. generated} flag set.
+%%
+%% The resulting variable will be on the format `Prefix<N>Suffix', where `N'
+%% is some small number. Prefix defaults to `__Var', and suffix to `__'.
+%%
+%% If `TEST' is set during compilation, the numbers will be deterministically
+%% increment from 1, otherwise they are random.
+%%
+%% @see erl_syntax_lib:new_variable_name/1
+-spec new_variable(bindings_or_form(), string(), string()) -> variable().
+new_variable(BindingsOrForm, Prefix, Suffix) ->
+    Set = into_set(BindingsOrForm),
+    Name = erl_syntax_lib:new_variable_name(
+        ?variable_name_formatting_fun(Prefix, Suffix), Set
+    ),
+    hd(maybe_form(BindingsOrForm, [Name])).
+
+%% @doc Same as {@link new_variables/4} with default prefix and suffix.
+-spec new_variables(pos_integer()) -> ordsets:ordset(variable()).
+new_variables(Total) when is_integer(Total) ->
+    new_variables(ordsets:new(), Total).
+
+%% @doc Same as {@link new_variables/4} with the given prefix and default
+%% suffix.
+-spec new_variables(bindings_or_form(), pos_integer()) -> ordsets:ordset(variable()).
+new_variables(BindingsOrForm, Total) ->
+    new_variables(BindingsOrForm, Total, "__Var", "__").
+
+%% @doc Same as {@link new_variables/4} with the given prefix and suffix.
+-spec new_variables(bindings_or_form(), pos_integer(), string()) ->
+    ordsets:ordset(variable()).
+new_variables(BindingsOrForm, Total, Prefix) ->
+    new_variables(BindingsOrForm, Total, Prefix, "").
+
+%% @doc Returns `Total' number of new variables like {@link new_variable/3}.
+%%
+%% @see erl_syntax_lib:new_variable_names/3
+-spec new_variables(bindings_or_form(), pos_integer(), string(), string()) ->
+    ordsets:ordset(variable()).
+new_variables(BindingsOrForm, Total, Prefix, Suffix) ->
+    Set = into_set(BindingsOrForm),
+    Vars = erl_syntax_lib:new_variable_names(
+        Total, ?variable_name_formatting_fun(Prefix, Suffix), Set
+    ),
+    maybe_form(BindingsOrForm, Vars).
+
+%%%_* Private ----------------------------------------------------------------
 
 %% @private
+%% @doc Like {@link lists:keyfind/3} with a default value.
+keyfind(List, Key, Default) ->
+    case lists:keyfind(Key, 1, List) of
+        {Key, Value} ->
+            Value;
+        false ->
+            case get(Key) of
+                undefined -> Default;
+                Value -> Value
+            end
+    end.
+
+%% @private
+-spec is_erl_anno
+    (erl_annotation()) -> true;
+    (erl_annotation_key()) -> true;
+    (any()) -> false.
+is_erl_anno(line) -> true;
+is_erl_anno(column) -> true;
+is_erl_anno(file) -> true;
+is_erl_anno(generated) -> true;
+is_erl_anno(location) -> true;
+is_erl_anno(record) -> true;
+is_erl_anno(text) -> true;
+is_erl_anno({Key, _Value}) when is_atom(Key) -> is_erl_anno(Key);
+is_erl_anno(_) -> false.
+
+%% @private
+-spec is_erl_syntax
+    (erl_syntax_ast()) -> true;
+    (erl_parse()) -> false.
+is_erl_syntax(Form) when is_tuple(Form) ->
+    Type = element(1, Form),
+    Type =:= tree orelse Type =:= wrapper.
+
+%% @private
+%% @doc Returns all annotations from {@link erl_anno} and {@link erl_syntax}.
+get_annotations_internal(Form) ->
+    ?assertIsForm(Form),
+    Anno = erl_syntax:get_pos(Form),
+    ErlAnno = [
+        {Name, get_anno(Name, Anno)}
+     || Name <- ?ERL_ANNO_KEYS,
+        get_anno(Name, Anno) =/= undefined
+    ],
+    ErlSyntax = maps:from_list(erl_syntax:get_ann(Form)),
+    ?assertEqual(
+        [],
+        ordsets:intersection(
+            ?ERL_ANNO_KEYS,
+            ordsets:from_list(maps:keys(ErlSyntax))
+        ),
+        "erl_anno keys must not be saved as erl_syntax annotations"
+    ),
+    {ErlAnno, ErlSyntax}.
+
+%% @private
+%% @doc Returns the given {@link erl_anno. annotation}.
+%%
+%% @see erl_anno:column/1
+%% @see erl_anno:file/1
+%% @see erl_anno:generated/1
+%% @see erl_anno:line/1
+%% @see erl_anno:location/1
+%% @see erl_anno:record/1
+get_anno(line, Anno) -> erl_anno:line(Anno);
+get_anno(column, Anno) -> erl_anno:column(Anno);
+get_anno(file, Anno) -> erl_anno:file(Anno);
+get_anno(generated, Anno) -> erl_anno:generated(Anno) orelse undefined;
+get_anno(location, Anno) -> erl_anno:location(Anno);
+get_anno(record, Anno) -> erl_anno:record(Anno) orelse undefined;
+get_anno(text, Anno) -> erl_anno:text(Anno);
+get_anno(_, _) -> undefined.
+
+%% @private
+%% @doc Updates the given {@link erl_anno. annotation}.
+%%
+%% @see erl_anno:set_column/2
+%% @see erl_anno:set_file/2
+%% @see erl_anno:set_generated/2
+%% @see erl_anno:set_line/2
+%% @see erl_anno:set_location/2
+%% @see erl_anno:set_record/2
+-spec set_anno(erl_annotation(), erl_anno:anno()) -> erl_anno:anno().
+set_anno({line, Line}, Anno) when is_integer(Line) ->
+    erl_anno:set_line(Line, Anno);
+set_anno({column, Column}, Anno) when is_integer(Column) ->
+    Line = erl_anno:line(Anno),
+    erl_anno:set_location({Line, Column}, Anno);
+set_anno({file, File}, Anno) when is_list(File) ->
+    erl_anno:set_file(File, Anno);
+set_anno({generated, Generated}, Anno) when is_boolean(Generated) ->
+    erl_anno:set_generated(Generated, Anno);
+set_anno({location, Location}, Anno) ->
+    erl_anno:set_location(Location, Anno);
+set_anno({record, Record}, Anno) when is_boolean(Record) ->
+    erl_anno:set_record(Record, Anno);
+set_anno({text, Text}, Anno) when is_list(Text) ->
+    erl_anno:set_text(Text, Anno).
+
+%% @private
+%% @doc Returns the given `Form' with the given {@link erl_annotations()}.
+%%
+%% Notably, this allows the caller to <em>remove</em> annotations. This is not
+%% possible with the {@link erl_anno} API.
+-spec set_erl_anno(merlin:ast(), erl_annotations()) -> erl_syntax_ast().
+set_erl_anno(Form, []) ->
+    Form;
+set_erl_anno(Form, ErlAnnotations) ->
+    Anno0 = erl_anno:new(erl_anno:line(erl_syntax:get_pos(Form))),
+    Anno1 = lists:foldl(fun set_anno/2, Anno0, ErlAnnotations),
+    set_pos(Form, Anno1).
+
+%% @private
+%% @doc Returns the given `Form' with the given {@link erl_anno. annotation}.
+set_pos(Form, Anno) ->
+    case is_erl_syntax(Form) of
+        true ->
+            erl_syntax:set_pos(Form, Anno);
+        false ->
+            setelement(2, Form, Anno)
+    end.
+
+%% @private
+-spec merge_bindings(bindings(), bindings() | ordsets:ordset(atom())) -> bindings().
 merge_bindings(
     #{env := Env0, bound := Bound0, free := Free0} = Bindings,
     #{env := NewEnv, bound := NewBound, free := NewFree}
@@ -787,20 +857,49 @@ merge_bindings(
 merge_bindings(
     #{env := _Env, bound := Bound0, free := Free0} = Bindings,
     NewBindings0
-) when is_list(NewBindings0) ->
-    NewBindings1 = lists:map(fun var_name/1, NewBindings0),
-    Free1 = ordsets:subtract(Free0, NewBindings1),
-    Bound1 = ordsets:union(Bound0, NewBindings1),
+) ->
+    NewBindings1 = sets:to_list(into_set(NewBindings0)),
+    NewBindings2 = lists:map(fun var_name/1, NewBindings1),
+    Free1 = ordsets:subtract(Free0, NewBindings2),
+    Bound1 = ordsets:union(Bound0, NewBindings2),
     Bindings#{
         free := Free1,
         bound := Bound1
     }.
 
+%% @private
+-spec maybe_form(bindings_or_form(), [atom() | variable()]) -> [variable()].
+maybe_form(Bindings, Variables) when
+    is_map(Bindings) orelse is_list(Bindings) andalso is_list(Variables)
+->
+    ordsets:from_list(Variables);
+maybe_form(Form, Variables) when is_list(Variables) ->
+    ?assertIsForm(Form),
+    [var(Form, Name) || Name <- Variables].
+
+%% @private
+-spec var(merlin:ast(), variable()) -> merlin:ast().
+var(Form, Name) when is_tuple(Form) andalso is_atom(Name) ->
+    set_annotation(
+        erl_syntax:copy_attrs(Form, erl_syntax:variable(Name)),
+        generated,
+        true
+    );
+var(Form, Var) when is_tuple(Form) andalso is_tuple(Var) ->
+    ?assertNodeType(Form, variable),
+    erl_syntax:copy_attrs(Form, Var).
+
+%% @private
+-spec var_name(variable()) -> atom().
+var_name(Name) when is_atom(Name) ->
+    Name;
+var_name(Form) when is_tuple(Form) ->
+    erl_syntax:variable_name(Form).
+
+%% @private
 into_set(Ordset) when is_list(Ordset) ->
     sets:from_list(Ordset);
-into_set(Annotations) when is_map(Annotations) ->
-    sets:from_list(get_bindings(Annotations));
-into_set(SetOrForm) when is_tuple(SetOrForm) ->
+into_set(SetOrForm) ->
     case sets:is_set(SetOrForm) of
         true ->
             SetOrForm;
@@ -809,6 +908,7 @@ into_set(SetOrForm) when is_tuple(SetOrForm) ->
             sets:from_list(get_bindings(SetOrForm))
     end.
 
+%%%_* Tests ==================================================================
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 
