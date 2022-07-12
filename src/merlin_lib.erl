@@ -303,7 +303,7 @@ find_source(Module) when is_atom(Module) ->
         end,
     case MaybeSource of
         undefined ->
-            CompileOptions = Module:info(compile),
+            CompileOptions = Module:module_info(compile),
             proplists:get_value(source, CompileOptions);
         Source ->
             Source
@@ -911,6 +911,189 @@ into_set(SetOrForm) ->
 %%%_* Tests ==================================================================
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
+-include_lib("syntax_tools/include/merl.hrl").
+
+-define(EXAMPLE_MODULE_SOURCE, [
+    "%% Example file",
+    "-module(example).",
+    "-file(\"example.erl\", 1).",
+    "",
+    "-file(\"include/example.hrl\", 1)."
+]).
+
+-define(EXAMPLE_MODULE_FORMS, ?Q(?EXAMPLE_MODULE_SOURCE)).
+
+%% During testing we ignore the randomly generated N, and use the process
+%% dictionary to keep track of the next number. This is to allow writing
+%% deterministic tests.
+%%
+%% It use multiple counters, one per prefix/suffix combination. This makes it
+%% much easier to guess what the automatic variable will be.
+test_variable_formatter(Prefix0, Suffix0) ->
+    Prefix1 = iolist_to_binary(io_lib:format("~s", [Prefix0])),
+    Suffix1 = iolist_to_binary(io_lib:format("~s", [Suffix0])),
+    Key = {'merlin_lib:variable_counter', Prefix1, Suffix1},
+    N =
+        case erlang:get(Key) of
+            undefined -> 1;
+            Number -> Number
+        end,
+    put(Key, N + 1),
+    binary_to_atom(iolist_to_binary(io_lib:format("~s~p~s", [Prefix1, N, Suffix1]))).
+
+file_test() ->
+    ?assertEqual("example.erl", file(?EXAMPLE_MODULE_FORMS)).
+
+module_test_() ->
+    maps:to_list(#{
+        "when -module exists" => ?_assertEqual(example, module(?EXAMPLE_MODULE_FORMS)),
+        "when -module is missing" => ?_assertEqual(
+            '', module(?Q("-file(\"example.erl\", 1)."))
+        )
+    }).
+
+module_form_test_() ->
+    maps:to_list(#{
+        "when -module exists" => ?_assertMerlEqual(
+            ?Q("-module(example)."), module_form(?EXAMPLE_MODULE_FORMS)
+        ),
+        "when -module is missing" => ?_assertEqual(
+            undefined, module_form(?Q("-file(\"example.erl\", 1)."))
+        )
+    }).
+
+update_tree_test_() ->
+    Tree = ?Q("1 + 2"),
+    FromTree = erl_syntax:infix_expr(
+        ?Q("1"),
+        erl_syntax:set_ann(erl_syntax:operator('+'), [{custom, "annotation"}]),
+        ?Q("2")
+    ),
+    maps:to_list(#{
+        "from syntax tree" => fun() ->
+            UpdatedTree = update_tree(Tree, FromTree),
+            ?assertEqual(
+                [{custom, "annotation"}],
+                erl_syntax:get_ann(erl_syntax:infix_expr_operator(UpdatedTree))
+            )
+        end,
+        "from groups" => fun() ->
+            Groups = erl_syntax:subtrees(FromTree),
+            UpdatedTree = update_tree(Tree, Groups),
+            ?assertEqual(
+                [{custom, "annotation"}],
+                erl_syntax:get_ann(erl_syntax:infix_expr_operator(UpdatedTree))
+            )
+        end
+    }).
+
+value_test_() ->
+    maps:to_list(#{
+        "atom" => ?_assertEqual(atom, value(?Q("atom"))),
+        "integer" => ?_assertEqual(31, value(?Q("31"))),
+        "float" => ?_assertEqual(1.618, value(?Q("1.618"))),
+        "char" => ?_assertEqual($m, value(?Q("$m"))),
+        "string" => ?_assertEqual("foo", value(?Q("\"foo\""))),
+        "tuple" => ?_assertError({badvalue, _}, value(?Q("{1, 2}"))),
+        "call" => ?_assertError({badvalue, _}, value(?Q("self()")))
+    }).
+
+into_error_marker_test_() ->
+    %% Without this acrobatics, the Erlang compiler will warn that the
+    %% division below will always fail.
+    {One, []} = string:to_integer("1"),
+    {Zero, []} = string:to_integer("0"),
+    maps:to_list(#{
+        "from stacktrace" => fun() ->
+            try
+                One / Zero
+            catch
+                error:badarith:Stacktrace ->
+                    Line = ?LINE - 3,
+                    ErrorMarker = into_error_marker(badarith, Stacktrace),
+                    ?assertEqual(
+                        {error, {?FILE, {Line, ?MODULE, badarith}}}, ErrorMarker
+                    )
+            end
+        end,
+        "from syntax node" => maps:to_list(#{
+            "without file" => fun() ->
+                Node = ?Q("some_term"),
+                Line = ?LINE - 1,
+                ErrorMarker = into_error_marker(badarith, Node),
+                ?assertEqual(
+                    {error, {none, {Line, ?MODULE, badarith}}}, ErrorMarker
+                )
+            end,
+            "with file" => fun() ->
+                Node0 = ?Q("some_term"),
+                Line = ?LINE - 1,
+                Node1 = erl_syntax:set_pos(
+                    Node0, erl_anno:set_file(?FILE, erl_syntax:get_pos(Node0))
+                ),
+                ErrorMarker = into_error_marker(badarith, Node1),
+                ?assertEqual(
+                    {error,
+                        {?FILE, {
+                            [{file, ?FILE}, {location, Line}], ?MODULE, badarith
+                        }}},
+                    ErrorMarker
+                )
+            end
+        })
+    }).
+
+find_source_test_() ->
+    SourceFile = filename:absname("_build/test/example/src/example.erl"),
+    ok = filelib:ensure_dir(SourceFile),
+    Ebin = filename:absname("_build/test/example/ebin"),
+    ok = filelib:ensure_dir(Ebin),
+    file:make_dir(Ebin),
+    true = code:add_path(Ebin),
+    maps:to_list(#{
+        "with debug_info" => fun() ->
+            compile_and_load_example_module(SourceFile, Ebin, [debug_info]),
+            ?assertEqual(SourceFile, find_source(example))
+        end,
+        "without debug_info" => fun() ->
+            compile_and_load_example_module(SourceFile, Ebin, []),
+            ?assertEqual(SourceFile, find_source(example))
+        end,
+        "both debug_info and source are missing" => fun() ->
+            compile_and_load_example_module(SourceFile, Ebin, []),
+            file:delete(SourceFile),
+            ?assertEqual(SourceFile, find_source(example))
+        end,
+        "with debug_info but with source missing" => fun() ->
+            compile_and_load_example_module(SourceFile, Ebin, [debug_info]),
+            file:delete(SourceFile),
+            ?assertEqual(SourceFile, find_source(example))
+        end,
+        "with debug_info but beam file missing" => fun() ->
+            compile_and_load_example_module(SourceFile, Ebin, [debug_info]),
+            file:delete(filename:join(Ebin, "example.beam")),
+            ?assertEqual(SourceFile, find_source(example))
+        end,
+        "both debug_info and beam file missing" => fun() ->
+            compile_and_load_example_module(SourceFile, Ebin, []),
+            file:delete(filename:join(Ebin, "example.beam")),
+            ?assertEqual(SourceFile, find_source(example))
+        end,
+        "without source in module_info and beam file missing" => fun() ->
+            compile_and_load_example_module(SourceFile, Ebin, [deterministic]),
+            file:delete(filename:join(Ebin, "example.beam")),
+            ?assertEqual(undefined, find_source(example))
+        end
+
+    }).
+
+compile_and_load_example_module(SourceFile, Ebin, Options) ->
+    ok = file:write_file(SourceFile, lists:join($\n, ?EXAMPLE_MODULE_SOURCE)),
+    {ok, example, []} = compile:file(SourceFile, Options ++ [return, {outdir, Ebin}]),
+    code:purge(example),
+    code:delete(example),
+    code:purge(example),
+    {module, example} = code:ensure_loaded(example).
 
 get_annotation_test_() ->
     LineAnno = erl_anno:new(7),
@@ -952,10 +1135,15 @@ get_annotations_test() ->
     ?assertEqual(ExpectedAnnotations, get_annotations(Form1)).
 
 set_annotation_test_() ->
-    LineAnno = erl_anno:new(7),
+    Line = 7,
+    Column = 23,
+    Location = {Line, Column},
+    LineAnno = erl_anno:new(Line),
     FileAnno = erl_anno:set_file(?FILE, LineAnno),
+    LocationAnno = erl_anno:set_location(Location, LineAnno),
     Form = {var, LineAnno, 'Variable'},
     FormWithFile = {var, FileAnno, 'Variable'},
+    FormWithLocation = {var, LocationAnno, 'Variable'},
     FormWithBound = erl_syntax:add_ann({bound, ['Foo']}, Form),
     FormWithBoth = erl_syntax:add_ann({bound, ['Foo']}, FormWithFile),
     maps:to_list(#{
@@ -963,6 +1151,7 @@ set_annotation_test_() ->
             ?assertEqual(FormWithBound, set_annotation(Form, bound, ['Foo']))
         end,
         "setting an erl_anno annotation does not covert the form to erl_syntax AST" => fun() ->
+            ?assertEqual(FormWithLocation, set_annotation(Form, location, Location)),
             ?assertEqual(FormWithFile, set_annotation(Form, file, ?FILE))
         end,
         "set erl_anno on erl_syntax AST" => fun() ->
@@ -985,5 +1174,24 @@ get_pos(Form) ->
 
 get_ann(Form) ->
     lists:sort(erl_syntax:get_ann(Form)).
+
+add_new_variable_test_() ->
+    Bindings0 = #{env => ordsets:new(), bound => ordsets:new(), free => ordsets:new()},
+    maps:to_list(#{
+        "binding" => fun() ->
+            Result0 = add_new_variable(Bindings0),
+            ?assertMatch(
+                {'__Var1__', #{env := [], bound := ['__Var1__'], free := []}}, Result0
+            ),
+            {_, Bindings1} = Result0,
+            Result1 = add_new_variable(Bindings1),
+            ?assertMatch(
+                {'__Var2__', #{
+                    env := [], bound := ['__Var1__', '__Var2__'], free := []
+                }},
+                Result1
+            )
+        end
+    }).
 
 -endif.
