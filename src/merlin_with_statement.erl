@@ -5,10 +5,6 @@
 
 -export([parse_transform/2]).
 
-parse_transform({error, _Errors, _Warnings} = Result, _Options) ->
-    Result;
-parse_transform({warning, _Tree, _Warnings} = Result, _Options) ->
-    Result;
 parse_transform(Forms, Options) ->
     AnnotatedForms = merlin:annotate(Forms, [file, bindings]),
     {FinalForms, _FinalState} = merlin:transform(
