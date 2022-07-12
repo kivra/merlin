@@ -29,7 +29,8 @@
     find_forms/2,
     transform/3,
     revert/1,
-    return/1
+    return/1,
+    then/2
 ]).
 
 %%%_* Types ------------------------------------------------------------------
@@ -77,8 +78,11 @@
     [{File :: string(), [exception_marker()]}].
 
 -type parse_transform_return() ::
-    [ast()]
-    | {warning, [ast()], exceptions_grouped_by_file()}
+    parse_transform_return([ast()]).
+
+-type parse_transform_return(Forms) ::
+    Forms
+    | {warning, Forms, exceptions_grouped_by_file()}
     | {error, exceptions_grouped_by_file(), exceptions_grouped_by_file()}.
 
 -type phase() :: enter | leaf | exit.
@@ -128,7 +132,7 @@
 %%%_ * API -------------------------------------------------------------------
 
 %% @equiv annotate(ModuleForms, [bindings, resolve_calls, file])
--spec annotate([ast()]) -> [ast()].
+-spec annotate([ast()]) -> parse_transform_return().
 annotate(ModuleForms) ->
     annotate(ModuleForms, [bindings, resolve_calls, file]).
 
@@ -150,30 +154,33 @@ annotate(ModuleForms) ->
 %% <dd>Each form is annotated with the current file, as determined by the most
 %% recent `-file' attribute.</dd>
 %% </dl>
--spec annotate([ast()], Options) -> [ast()] when
+-spec annotate(ModuleForms, Options) -> parse_transform_return(ModuleForms) when
+    ModuleForms :: [ast()],
     Options :: [Option | {Option, boolean()}],
     Option :: bindings | resolve_calls | file.
 annotate(ModuleForms, Options) ->
     State = maps:merge(maps:from_list(proplists:unfold(Options)), #{
         analysis => analyze(ModuleForms)
     }),
-    {Forms, #{analysis := Analysis}} = transform(
+    {Result, #{analysis := Analysis}} = transform(
         ModuleForms,
         fun annotate_internal/3,
         State
     ),
-    [
-        case
-            erl_syntax:type(Form) =:= attribute andalso
-                merlin_lib:value(erl_syntax:attribute_name(Form)) =:= module
-        of
-            true ->
-                merlin_lib:set_annotation(Form, analysis, Analysis);
-            false ->
-                Form
-        end
-     || Form <- Forms
-    ].
+    then(Result, fun(Forms) ->
+        [
+            case
+                erl_syntax:type(Form) =:= attribute andalso
+                    merlin_lib:value(erl_syntax:attribute_name(Form)) =:= module
+            of
+                true ->
+                    merlin_lib:set_annotation(Form, analysis, Analysis);
+                false ->
+                    Form
+            end
+         || Form <- Forms
+        ]
+    end).
 
 %% @doc Like `erl_syntax_lib:analyze_forms' but returns maps.
 %%
@@ -238,6 +245,18 @@ find_forms(Forms, Fun) when is_function(Fun, 1) ->
     ),
     lists:reverse(Result).
 
+%% @doc Calls the given function with the forms inside the given `Result',
+%% while preserving any errors and/or warnings.
+-spec then(Result, fun((Forms) -> Forms)) -> Result when
+    Result :: parse_transform_return(Forms),
+    Forms :: [ast()].
+then({warning, Tree, Warnings}, Fun) when is_function(Fun, 1) ->
+    {warning, Fun(Tree), Warnings};
+then({error, Error, Warnings}, Fun) when is_function(Fun, 1) ->
+    {error, Error, Warnings};
+then(Tree, Fun) when is_function(Fun, 1) ->
+    Fun(Tree).
+
 %% @doc Transforms the given `Forms' using the given `Transformer' with the
 %% given `State'.
 %%
@@ -247,8 +266,10 @@ find_forms(Forms, Fun) when is_function(Fun, 1) ->
 %% 3, When you `exit' a subtree
 %%
 %% It's recommended to have a match-all clause to future proof your code.
--spec transform([ast()], transformer(Extra), Extra) ->
-    {parse_transform_return(), Extra}.
+-spec transform(Forms, transformer(Extra), Extra) ->
+    {parse_transform_return(Forms), Extra}
+when
+    Forms :: [ast()].
 transform(Forms, Transformer, Extra) when is_function(Transformer, 3) ->
     InternalState0 = #state{
         file = merlin_lib:file(Forms),
@@ -284,24 +305,19 @@ transform(Forms, Transformer, Extra) when is_function(Transformer, 3) ->
 %% @doc Returns the result from {@link transform/3}, or just the
 %% final forms, to an {@link erl_lint} compatible format.
 %%
-%% This {@link revert/1. reverts} and forms, while respecting any
+%% This {@link revert/1. reverts} the forms, while respecting any
 %% errors and/or warnings.
--spec return(parse_transform_return() | {parse_transform_return(), State}) ->
-    parse_transform_return()
+-spec return(parse_transform_return(Forms) | {parse_transform_return(Forms), State}) ->
+    parse_transform_return(Forms)
 when
-    State :: term().
+    State :: term(),
+    Forms :: [ast()].
 return({Result, _State}) ->
     _ = merlin_internal:write_log_file(),
-    return(Result);
-return({warning, Tree, Warnings}) ->
+    then(Result, fun revert/1);
+return(Result) ->
     _ = merlin_internal:write_log_file(),
-    {warning, revert(Tree), Warnings};
-return({error, _Error, _Warnings} = Result) ->
-    _ = merlin_internal:write_log_file(),
-    Result;
-return(Tree) ->
-    _ = merlin_internal:write_log_file(),
-    revert(Tree).
+    then(Result, fun revert/1).
 
 %% @doc Reverts back from Syntax Tools format to Erlang forms.
 %%
@@ -385,7 +401,9 @@ annotate_form(function, Form0, #{
 }) ->
     Name = erl_syntax:atom_value(erl_syntax:function_name(Form0)),
     Arity = erl_syntax:function_arity(Form0),
-    Form1 = merlin_lib:set_annotation(Form0, is_exported, is_exported(Name, Arity, Analysis)),
+    Form1 = merlin_lib:set_annotation(
+        Form0, is_exported, is_exported(Name, Arity, Analysis)
+    ),
     Form2 =
         case Attributes of
             #{spec := #{{Name, Arity} := Spec}} ->
@@ -506,7 +524,7 @@ list_phrase(List) ->
     lists:concat(LastCommaReplacedWithAnd).
 
 %% @private
-is_exported(Name, Arity, #{exports:=Exports}) ->
+is_exported(Name, Arity, #{exports := Exports}) ->
     lists:member({Name, Arity}, Exports).
 
 %%% Start analyze helpers
