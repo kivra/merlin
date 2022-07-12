@@ -1,4 +1,6 @@
--define(debug(A), ?log(debug, A)).
+-ifndef(MERLIN_LOG_HRL).
+-define(MERLIN_LOG_HRL, true).-define(debug(A), ?log(debug, A)).
+
 -define(debug(A, B), ?log(debug, A, B)).
 -define(debug(A, B, C), ?log(debug, A, B, C)).
 
@@ -151,3 +153,5 @@ end).
 end).
 
 -define(varrt(Expr), ?var(merlin:revert(Expr))).
+
+-endif.
