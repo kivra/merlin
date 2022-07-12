@@ -1043,6 +1043,31 @@ unset_logger_target(Key) ->
 -include("internal.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
+examples_test_() ->
+    [
+        {filename:basename(Example), fun() ->
+            PreProcessedResult = epp:parse_file(Example, ["include"], []),
+            ?assertMatch({ok, _}, PreProcessedResult),
+            {ok, ModuleForms} = PreProcessedResult,
+            ?assertMerlEqual(ModuleForms, identity_transform(ModuleForms)),
+            {_Analysis, Options} = analyze(ModuleForms, []),
+            ParseTransforms = proplists:get_all_values(parse_transform, Options),
+            TransformedForms = lists:foldl(
+                fun(ParseTransform, Forms) ->
+                    ParseTransform:parse_transform(Forms, Options)
+                end,
+                ModuleForms,
+                ParseTransforms
+            ),
+            ?pp(TransformedForms),
+            ?assertMatch(
+                {ok, Module, Beam} when is_atom(Module) andalso is_binary(Beam),
+                compile:forms(TransformedForms, [])
+            )
+        end}
+     || Example <- filelib:wildcard("examples/*.erl")
+    ].
+
 proper_test() ->
     ?quickcheck(transform_prop()).
 
