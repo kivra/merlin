@@ -11,6 +11,7 @@
 %%%_* Exports ================================================================
 %%%_ * API -------------------------------------------------------------------
 -export([
+    export/2,
     file/1,
     module/1,
     module_form/1,
@@ -180,6 +181,46 @@ end).
 
 %%%_* Code ===================================================================
 %%%_ * API -------------------------------------------------------------------
+
+%% @doc Returns the given form with an `-export' attribute for the given
+%% functions.
+%%
+%% If the `-module' attribute is missing, the `-export' is prepended to the
+%% given forms.
+%%
+%% If it's available, the `-export' is inserted just after the `-module'. In
+%% addition, if the `-module' attribute form as an `analysis' annotation, i.e.
+%% from {@link merlin:annotate/2}, then it is used to avoid re-exporting any
+%% functions already exported.
+-spec export([merlin:ast()], [{atom(), arity()}]) -> [merlin:ast()].
+export(Forms, []) ->
+    Forms;
+export([], FunctionsToExport) ->
+    export_attribute(FunctionsToExport);
+export(Forms, FunctionsToExport0) ->
+    case
+        lists:splitwith(
+            fun(Form) ->
+                not (erl_syntax:type(Form) == attribute andalso
+                    erl_syntax:atom_value(erl_syntax:attribute_name(Form)) == module)
+            end,
+            Forms
+        )
+    of
+        {Init, [ModuleForm | Tail]} ->
+            Annotations = erl_syntax:get_ann(ModuleForm),
+            MaybeExportAttribute =
+                case lists:keyfind(analysis, 1, Annotations) of
+                    {analysis, Analysis} ->
+                        export_attribute(FunctionsToExport0, Analysis);
+                    false ->
+                        export_attribute(FunctionsToExport0)
+                end,
+            lists:flatten([Init, ModuleForm, MaybeExportAttribute], Tail);
+        {Forms, []} ->
+            MaybeExportAttribute = export_attribute(FunctionsToExport0),
+            lists:flatten([MaybeExportAttribute], Forms)
+    end.
 
 %% @doc Returns the filename for the first `-file' attribute in `Forms', or
 %% `""' if not found.
@@ -722,6 +763,30 @@ new_variables(BindingsOrForm, Total, Prefix, Suffix) ->
 %%%_* Private ----------------------------------------------------------------
 
 %% @private
+export_attribute([]) ->
+    [];
+export_attribute(FunctionsToExport) ->
+    [
+        erl_syntax:attribute(erl_syntax:atom(export), [
+            erl_syntax:list([
+                erl_syntax:arity_qualifier(
+                    erl_syntax:atom(Function), erl_syntax:integer(Arity)
+                )
+             || {Function, Arity} <- FunctionsToExport
+            ])
+        ])
+    ].
+
+%% @private
+export_attribute([], _Analysis) ->
+    [];
+export_attribute(FunctionsToExport0, #{exports := Exported0}) ->
+    Exported1 = ordsets:from_list(Exported0),
+    FunctionsToExport1 = ordsets:from_list(FunctionsToExport0),
+    FunctionsToExport2 = ordsets:subtract(FunctionsToExport1, Exported1),
+    export_attribute(FunctionsToExport2).
+
+%% @private
 %% @doc Like {@link lists:keyfind/3} with a default value.
 keyfind(List, Key, Default) ->
     case lists:keyfind(Key, 1, List) of
@@ -950,6 +1015,106 @@ test_variable_formatter(Prefix0, Suffix0) ->
 %% Resets the `test_variable_formatter' counter.
 reset_variable_counter() ->
     erase('merlin_lib:variable_counter').
+
+export_test_() ->
+    maps:to_list(#{
+        "empty module forms" => ?_assertMerlEqual(
+            ?Q("-export([foo/1])."),
+            export([], [{foo, 1}])
+        ),
+        "empty list of functions to export" => ?_assertMerlEqual(
+            ?Q("-module(example)."),
+            export(?Q("-module(example)."), [])
+        ),
+        "new function" => ?_assertMerlEqual(
+            ?Q([
+                "-module(example).",
+                "-export([foo/1]).",
+                "bar() -> ok."
+            ]),
+            export(
+                ?Q([
+                    "-module(example).",
+                    "bar() -> ok."
+                ]),
+                [{foo, 1}]
+            )
+        ),
+        "forms before -module" => ?_assertMerlEqual(
+            ?Q([
+                "-file(\"example.erl\", 1).",
+                "-module(example).",
+                "-export([foo/1]).",
+                "bar() -> ok."
+            ]),
+            export(
+                ?Q([
+                    "-file(\"example.erl\", 1).",
+                    "-module(example).",
+                    "bar() -> ok."
+                ]),
+                [{foo, 1}]
+            )
+        ),
+        "already exported without analysis" => ?_assertMerlEqual(
+            ?Q([
+                "-module(example).",
+                "-export([bar/0]).",
+                "-export([bar/0]).",
+                "bar() -> ok."
+            ]),
+            export(
+                ?Q([
+                    "-module(example).",
+                    "-export([bar/0]).",
+                    "bar() -> ok."
+                ]),
+                [{bar, 0}]
+            )
+        ),
+        "with analysis" => begin
+            [ModuleForm | Tail] = ?Q([
+                "-module(example).",
+                "-export([bar/0]).",
+                "bar() -> ok."
+            ]),
+            Analysis = merlin:analyze([ModuleForm | Tail]),
+            ModuleForms = [erl_syntax:add_ann({analysis, Analysis}, ModuleForm) | Tail],
+            maps:to_list(#{
+                "already existing" => ?_assertMerlEqual(
+                    ?Q([
+                        "-module(example).",
+                        "-export([bar/0]).",
+                        "bar() -> ok."
+                    ]),
+                    export(ModuleForms, [{bar, 0}])
+                ),
+                "both new and existing" => ?_assertMerlEqual(
+                    ?Q([
+                        "-module(example).",
+                        "-export([foo/1]).",
+                        "-export([bar/0]).",
+                        "bar() -> ok."
+                    ]),
+                    export(ModuleForms, [{bar, 0}, {foo, 1}])
+                )
+            })
+        end,
+        "missing module" => ?_assertMerlEqual(
+            ?Q([
+                "-export([foo/1]).",
+                "bar() -> ok.",
+                "baz() -> 123."
+            ]),
+            export(
+                ?Q([
+                    "bar() -> ok.",
+                    "baz() -> 123."
+                ]),
+                [{foo, 1}]
+            )
+        )
+    }).
 
 file_test() ->
     ?assertEqual("example.erl", file(?EXAMPLE_MODULE_FORMS)).
