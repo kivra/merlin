@@ -124,14 +124,14 @@
     },
     exports := [function_name()],
     file := string(),
-    functions := [{atom(), pos_integer()}],
+    functions := [{atom(), arity()}],
     imports := #{module() => [function_name()]},
     module_imports := [module()],
     records := map(),
     errors | module | warnings => _
 }.
 
--type function_name() :: atom() | {atom(), pos_integer()} | {module(), atom()}.
+-type function_name() :: atom() | {atom(), arity()} | {module(), atom()}.
 
 %%%_* Code ===================================================================
 %%%_ * API -------------------------------------------------------------------
