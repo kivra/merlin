@@ -1,8 +1,9 @@
 -module(merlin_auto_increment_bindings).
 
+-feature(maybe_expr, enable).
+
 -include("merlin_quote.hrl").
 -include("merlin_in.hrl").
--include("merlin_with_statement.hrl").
 -include("log.hrl").
 
 -export([
@@ -49,16 +50,13 @@ transform_pin_operator(enter, ?QQ("_@Function"), State)
         )
     }};
 transform_pin_operator(enter, ?QQ("_@Pattern0 = _@Body0"), State) ->
-    ?with [_ ||
-        {[Body1], State1} <- transform([Body0], State),
-        {[Pattern1], State2} <- transform([Pattern0], State1),
-        {Pattern1, Body1, State2}
-    ] of
-        {Pattern2, Body2, State3} ->
-            {return, ?QQ("_@Pattern2 = _@Body2"), State3}
-    ?else
-        {Failure, State4} when is_map(State4) ->
-            {parse_transform, Failure, State4};
+    maybe
+        {[Body1], State1} ?= transform([Body0], State),
+        {[Pattern1], State2} ?= transform([Pattern0], State1),
+        {return, ?QQ("_@Pattern1 = _@Body1"), State2}
+    else
+        {Failure, State3} when is_map(State3) ->
+            {parse_transform, Failure, State3};
         Unknown ->
             {error, {unknown_return, Unknown}}
     end;
