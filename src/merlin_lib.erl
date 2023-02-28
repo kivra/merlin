@@ -119,9 +119,9 @@ end).
 %% Represents either of the two builtin `set' data structures in OTP.
 
 -type bindings() :: #{
-    env := ordsets:set(variable()),
-    bound := ordsets:set(variable()),
-    free := ordsets:set(variable())
+    env := ordsets:ordset(variable()),
+    bound := ordsets:ordset(variable()),
+    free := ordsets:ordset(variable())
 }.
 %% Represents the current bindings for a form
 
@@ -319,7 +319,7 @@ format_error(_, _) ->
 %% <a href="https://erlang.org/doc/man/erl_parse.html#errorinfo">
 %% error info</a> with the given reason and location taken from the second
 %% argument. If it is a stacktrace, the latter is taken from the first frame.
-%% Otherwise it is assumed to be a {@link merlin:ast/0. syntax node} and its
+%% Otherwise it is assumed to be a {@link merlin:ast(). syntax node} and its
 %% location is used.
 -spec into_error_marker(Reason, Stacktrace | Node) -> merlin:error_marker() when
     Reason :: term(),
@@ -498,7 +498,8 @@ get_attribute_forms(Tree, Name) ->
     lists:filter(?attribute_filter(Name), Tree).
 
 %% @doc Adds the given binding to the existing ones.
-%% See {@link add_bindings/2}.
+%%
+%% @see add_bindings/2
 -spec add_binding
     (bindings(), variable()) -> bindings();
     (merlin:ast(), variable()) -> erl_syntax_ast().
@@ -506,12 +507,14 @@ add_binding(BindingsOrForm, NewBinding) ->
     add_bindings(BindingsOrForm, [NewBinding]).
 
 %% @doc Adds the given bindings to the existing ones.
-%% Accepts the same input as {@link get_bindings}.
+%% Accepts the same input as {@link get_bindings/1}.
 %%
 %% When given a form, it updates the bindings on that form, see
 %% {@link merlin:annotate/2} for more info.
-%% When given a map of bindings as returned by {@link get_bindings_with_type},
-%% it updates the `free' and `bound' fields as appropriate.
+%%
+%% When given a map of bindings as returned by
+%% {@link get_bindings_with_type/1}, it updates the `free' and `bound' fields
+%% as appropriate.
 -spec add_bindings
     (bindings(), set()) -> bindings();
     (merlin:ast(), set()) -> erl_syntax_ast().
@@ -576,7 +579,7 @@ get_binding_type(Form, Name) when is_tuple(Form) ->
 
 %% @doc Get all bindings for the given value.
 %% Can be a set of annotations, see {@link get_annotations/1}, or
-%% {@link merlin:ast/0} form from which those annotations are taken.
+%% {@link merlin:ast()} form from which those annotations are taken.
 -spec get_bindings(bindings_or_form()) -> ordsets:ordset(atom()).
 get_bindings(#{bound := Bound, env := Env, free := Free}) ->
     lists:map(fun var_name/1, ordsets:union([Env, Bound, Free]));

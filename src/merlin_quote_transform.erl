@@ -202,7 +202,7 @@ switch_internal(Arguments, [Clause | Clauses]) ->
 %% case all user annotaions are copied, not just the {@link erl_anno:anno/0}
 %% annotations.
 %%
-%% @see erl_anno:anno/0
+%% @see erl_anno:anno()
 %% @see erl_syntax:copy_attrs/2
 set_location(Location, Target) ->
     case erl_anno:is_anno(Location) of

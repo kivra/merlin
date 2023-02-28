@@ -8,7 +8,7 @@ The latter might have support for carrying a state during transform, but it's
 not documented. The one function that is only supports simple transforms, and
 require intimate knowledge about the Erlang AST. While I do think knowing the
 AST is good, `merl` makes it much easier to work with, and it's a shame it
-doesn't fit into `parse_trans` to well.
+doesn't fit into `parse_trans` so well.
 
 Merlin rectifies that by embracing `merl` and provides a small parse
 transform to extend its `case` matching to function heads.

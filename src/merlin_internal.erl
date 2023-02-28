@@ -1,3 +1,7 @@
+%%% @doc
+%%% @private
+%%% @end
+
 -module(merlin_internal).
 
 -export([
