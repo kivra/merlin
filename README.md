@@ -22,8 +22,8 @@ parse_transform(Forms, CompileOptions) ->
     }),
     merlin:return(Forms1).
 
-transform(enter, ?QQ("_@Var"), State) when erl_syntax:type(Var) =:= variable ->
-    ?QQ("_@Var = 123");
+transform(enter, ?Q("_@Var"), State) when erl_syntax:type(Var) =:= variable ->
+    ?Q("_@Var = 123");
 transform(_, _, _) ->
     continue.
 ```

@@ -38,7 +38,7 @@ format_error(UnknownReason) ->
 transform(Forms, State) ->
     merlin:transform(Forms, fun transform_pin_operator/3, State).
 
-transform_pin_operator(enter, ?QQ("_@Function"), State)
+transform_pin_operator(enter, ?Q("_@Function"), State)
     when erl_syntax:type(Function) =:= function
 ->
     {continue, Function, State#{
@@ -49,24 +49,24 @@ transform_pin_operator(enter, ?QQ("_@Function"), State)
             )
         )
     }};
-transform_pin_operator(enter, ?QQ("_@Pattern0 = _@Body0"), State) ->
+transform_pin_operator(enter, ?Q("_@Pattern0 = _@Body0"), State) ->
     maybe
         {[Body1], State1} ?= transform([Body0], State),
         {[Pattern1], State2} ?= transform([Pattern0], State1),
-        {return, ?QQ("_@Pattern1 = _@Body1"), State2}
+        {return, ?Q("_@Pattern1 = _@Body1"), State2}
     else
         {Failure, State3} when is_map(State3) ->
             {parse_transform, Failure, State3};
         Unknown ->
             {error, {unknown_return, Unknown}}
     end;
-transform_pin_operator(enter, ?QQ("_@Case") = Form, State)
+transform_pin_operator(enter, ?Q("_@Case") = Form, State)
     when erl_syntax:type(Case) ?in [case_expr, if_expr]
 ->
     {continue, Form, State#{
         previous => State
     }};
-transform_pin_operator(enter, ?QQ("_@Case") = Form, State)
+transform_pin_operator(enter, ?Q("_@Case") = Form, State)
     when erl_syntax:type(Case) =:= clause
 ->
     case State of
@@ -77,7 +77,7 @@ transform_pin_operator(enter, ?QQ("_@Case") = Form, State)
         _ ->
             continue
     end;
-transform_pin_operator(leaf, ?QQ("_@Var"), State)
+transform_pin_operator(leaf, ?Q("_@Var"), State)
     when auto_incrementable(Var)
 ->
     #{ auto_bindings := Bindings } = State,
@@ -86,7 +86,7 @@ transform_pin_operator(leaf, ?QQ("_@Var"), State)
     Var1 = erl_syntax:variable(Name ++ integer_to_list(NextIndex)),
     Var2 = erl_syntax:copy_attrs(Var, Var1),
     {Var2, State#{ auto_bindings := Bindings#{ Name => NextIndex } }};
-transform_pin_operator(leaf, ?QQ("_@Var"), State)
+transform_pin_operator(leaf, ?Q("_@Var"), State)
     when is_pinnable(Var)
 ->
     #{
@@ -106,7 +106,7 @@ transform_pin_operator(leaf, ?QQ("_@Var"), State)
             CurrentVar = erl_syntax:variable(Name ++ integer_to_list(Index)),
             erl_syntax:copy_attrs(Var, CurrentVar)
     end;
-transform_pin_operator(leaf, ?QQ("_@Var"), State)
+transform_pin_operator(leaf, ?Q("_@Var"), State)
     when erl_syntax:type(Var) =:= variable
 ->
     #{ auto_bindings := Bindings } = State,
@@ -115,7 +115,7 @@ transform_pin_operator(leaf, ?QQ("_@Var"), State)
         false -> continue;
         true -> {error, {ambiguous_binding_usage, Name}}
     end;
-transform_pin_operator(exit, ?QQ("_@Case") = Form, State)
+transform_pin_operator(exit, ?Q("_@Case") = Form, State)
     when erl_syntax:type(Case) =:= case_expr
 ->
     PreviousState = maps:get(previous, State),
