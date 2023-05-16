@@ -33,7 +33,9 @@
                     ]}
                 )
         end
-    end)(Expr))
+    end)(
+        Expr
+    ))
 end).
 
 -define(_assertMerlMatch(Guard, Expr), ?_test(?assertMerlMatch(Guard, Expr))).
@@ -64,7 +66,9 @@ end).
                     ]}
                 )
         end
-    end)(Expected, Expr))
+    end)(
+        Expected, Expr
+    ))
 ).
 -define(_assertMerlEqual(Expected, Expr), ?_test(?assertMerlEqual(Expected, Expr))).
 
@@ -84,7 +88,8 @@ end).
                         {line, ?LINE},
                         {expression, "erl_syntax:type(" ??Expr ")"},
                         {pattern, "{ error , {badarg, _} , [...] }"},
-                        {unexpected_exception, {error, {badarg, X__Node}, __Stacktrace__}}
+                        {unexpected_exception,
+                            {error, {badarg, X__Node}, __Stacktrace__}}
                     ]},
                     __Stacktrace__
                 )

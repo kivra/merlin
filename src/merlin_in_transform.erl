@@ -11,17 +11,17 @@ parse_transform(Forms, _Options) ->
     File = merlin_lib:file(Forms),
     merlin:return(merlin:transform(Forms, fun transformer/3, File)).
 
-transformer(enter, ?QQ("_@Needle and merlin_in_transform:'IN'() and []"), _File) ->
+transformer(enter, ?Q("_@Needle and merlin_in_transform:'IN'() and []"), _File) ->
     {error, "empty list for `?in´ comparison"};
 transformer(
     enter,
-    ?QQ("_@Needle and merlin_in_transform:'IN'() and [_@@Elements]") = Form,
+    ?Q("_@Needle and merlin_in_transform:'IN'() and [_@@Elements]") = Form,
     _File
 ) ->
     combine(Form, Needle, in, Elements, fun compare/2);
 transformer(
     enter,
-    ?QQ("_@Needle and merlin_in_transform:'IN'(_@ExpressionAST)") = Form,
+    ?Q("_@Needle and merlin_in_transform:'IN'(_@ExpressionAST)") = Form,
     File
 ) ->
     ExpressionSource = merlin_lib:value(ExpressionAST),
@@ -41,19 +41,19 @@ transformer(
         {_, _, {error, HighError}} ->
             HighError;
         {Low, '..', High} ->
-            ?QQ("_@Low  < _@Needle andalso _@Needle  < _@High");
+            ?Q("_@Low  < _@Needle andalso _@Needle  < _@High");
         {Low, '...', High} ->
-            ?QQ("_@Low =< _@Needle andalso _@Needle =< _@High")
+            ?Q("_@Low =< _@Needle andalso _@Needle =< _@High")
     end;
 transformer(
     enter,
-    ?QQ("_@Needle =:= merlin_in_transform:'ONE OF'(_@@Args)") = Form,
+    ?Q("_@Needle =:= merlin_in_transform:'ONE OF'(_@@Args)") = Form,
     _File
 ) ->
     combine(Form, Needle, oneof, Args, fun '=:='/2);
 transformer(
     enter,
-    ?QQ("_@Needle == merlin_in_transform:'ONE OF'(_@@Args)") = Form,
+    ?Q("_@Needle == merlin_in_transform:'ONE OF'(_@@Args)") = Form,
     _File
 ) ->
     combine(Form, Needle, oneof, Args, fun '=='/2);
@@ -74,13 +74,13 @@ combine(Form, Needle, _Macro, Elements, Fun) when
     erl_syntax:copy_attrs(Form, lists:foldr(fun 'orelse'/2, Last, Init)).
 
 'orelse'(Left, Right) ->
-    ?QQ("_@Left orelse _@Right").
+    ?Q("_@Left orelse _@Right").
 
 '=:='(Left, Right) ->
-    erl_syntax:copy_attrs(Left, ?QQ("_@Left =:= _@Right")).
+    erl_syntax:copy_attrs(Left, ?Q("_@Left =:= _@Right")).
 
 '=='(Left, Right) ->
-    erl_syntax:copy_attrs(Left, ?QQ("_@Left == _@Right")).
+    erl_syntax:copy_attrs(Left, ?Q("_@Left == _@Right")).
 
 compare(Needle, Term) ->
     case erl_syntax:type(Term) of

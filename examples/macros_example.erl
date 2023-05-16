@@ -25,9 +25,9 @@ simple_eval() ->
         Compare =
             fun
                 (Term) when is_float(Term) ->
-                    ?QQ("_@Needle == _@Term@");
+                    ?Q("_@Needle == _@Term@");
                 (Term) ->
-                    ?QQ("_@Needle =:= _@Term@")
+                    ?Q("_@Needle =:= _@Term@")
             end,
         case Elements of
             [] ->
@@ -39,7 +39,7 @@ simple_eval() ->
                 erl_syntax:copy_pos(
                     Needle,
                     lists:foldl(
-                        fun(Left, Right) -> ?QQ("_@Left orelse _@Right") end,
+                        fun(Left, Right) -> ?Q("_@Left orelse _@Right") end,
                         First,
                         Rest
                     )
@@ -97,7 +97,7 @@ end).
     ?module_procedural(def(NAME, BODY), begin
         Name = abstract(NAME),
         [Fun] = abstract(BODY),
-        ?QQ("fun(_@_) -> _@_@Clauses end") = Fun,
+        ?Q("fun(_@_) -> _@_@Clauses end") = Fun,
         Arity = erl_syntax:fun_expr_arity(Fun),
         Pos = ?LINE,
         Integer = {type, Pos, integer, []},
@@ -113,7 +113,7 @@ end).
         },
         [
             Spec,
-            ?QQ("'@Name'() -> _@_@Clauses.")
+            ?Q("'@Name'() -> _@_@Clauses.")
         ]
     end)
 ).

@@ -1,6 +1,7 @@
 {application, merlin, [
-    {description, "Hygienic and procedural macros for Erlang"},
-    {vsn, "0.1.0"},
+    {pkg_name, "kivra_merlin"},
+    {description, "Parse transform library for Erlang"},
+    {vsn, "2.1.0"},
     {registered, []},
     {applications, [
         kernel,
@@ -8,7 +9,8 @@
     ]},
     {env, []},
     {modules, []},
-
-    {licenses, ["Apache 2.0"]},
-    {links, []}
+    {licenses, ["Apache-2.0"]},
+    {links, [
+        {"GitHub", "https://github.com/kivra/merlin"}
+    ]}
 ]}.
