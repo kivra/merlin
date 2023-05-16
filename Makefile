@@ -27,10 +27,7 @@ typer_results.erl: ${REBAR3_PLT}
 priv/sys.config:
 	cp -i priv/sys.config.sample priv/sys.config
 
-include/merlin_oneof.hrl:
-	escript priv/scripts/generate_oneof_hrl.escript
-
-_build/default/lib/merlin/ebin/merlin.beam console.log: src/* include/* include/merlin_oneof.hrl priv/*
+_build/default/lib/merlin/ebin/merlin.beam console.log: src/* include/* priv/*
 	env ERL_AFLAGS="-config priv/sys.config" \
 	rebar3 compile
 

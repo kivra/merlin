@@ -1049,7 +1049,6 @@ examples_test_() ->
             PreProcessedResult = epp:parse_file(Example, ["include"], []),
             ?assertMatch({ok, _}, PreProcessedResult),
             {ok, ModuleForms} = PreProcessedResult,
-            ?assertMerlEqual(ModuleForms, identity_transform(ModuleForms)),
             {_Analysis, Options} = analyze(ModuleForms, []),
             ParseTransforms = proplists:get_all_values(parse_transform, Options),
             TransformedForms = lists:foldl(

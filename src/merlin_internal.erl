@@ -4,10 +4,7 @@
 
 -module(merlin_internal).
 
--export([
-    'DEFINE PROCEDURAL MACRO'/7
-]).
-
+%%%_* Exports ================================================================
 -export([
     export_all/1,
     eunit/1,
@@ -29,44 +26,6 @@
 -endif.
 
 %% @hidden
--spec 'DEFINE PROCEDURAL MACRO'(
-    file:filename(), erl_anno:line(), module(), atom(), arity(), string(), fun(
-        () -> any()
-    )
-) -> no_return().
-'DEFINE PROCEDURAL MACRO'(
-    File,
-    Line,
-    Module,
-    'MERLIN INTERNAL DEFINE PROCEDURAL MACRO',
-    0,
-    Macro,
-    _BodyFun
-) ->
-    Function = '',
-    Arity = 0,
-    erlang:raise(
-        error,
-        {missing_parse_transform,
-            lists:concat([
-                "To use merlin macros you must enable the merlin parse transform. ",
-                "In macro expression ?",
-                Macro
-            ])},
-        [{Module, Function, Arity, [{file, File}, {line, Line}]}]
-    );
-'DEFINE PROCEDURAL MACRO'(File, Line, Module, Function, Arity, Macro, _BodyFun) ->
-    erlang:raise(
-        error,
-        {missing_parse_transform,
-            lists:concat([
-                "To use merlin macros you must enable the merlin parse transform. ",
-                "In macro expression ?",
-                Macro
-            ])},
-        [{Module, Function, Arity, [{file, File}, {line, Line}]}]
-    ).
-
 %% @private
 %% @doc This is a helper for the ?level(A, B, C) macros.
 %% Unfortunately it can't be inlined because dialyzer complains about

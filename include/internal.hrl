@@ -8,9 +8,6 @@
 -define(if_asserting(Block), Block).
 -endif.
 
-%% The macro for this transform looks like this:
-%% -define(QQ(Forms), {'MERLIN QUOTE MARKER', ?FILE, ?LINE, Forms}).
-
 %% Helper macro to allow writing inline source code instead of a string of
 %% source code. Its especially nice to not having to escape double quotes.
 -define(STRINGIFY(Value), ??Value).
@@ -28,34 +25,6 @@
 -define(QUOTE(Form1, Form2, Form3), ?Q(??Form1 "," ??Form2 "," ??Form3 ".")).
 -define(QUOTE(Form1, Form2, Form3, Form4),
     ?Q(??Form1 "," ??Form2 "," ??Form3 "," ??Form4 ".")
-).
-
-%% Replaces forms matching `SearchPattern' using `ReplacementPattern' in
-%% `Forms'.
-%%
-%% For example, to replace calls to `my_logger:info' with a call to
-%% `my_logger:log' you would do something like:
-%%
-%% ```
-%% ?replace(Forms, "my_logger:info(_@@Args)", "my_logger:log(info, _@Args)")
-%% '''
-%%
-%% It's a macro and not a function because it uses merls `?Q/1' macros under
-%% the hood.
--define(replace(Forms, SearchPattern, ReplacementPattern),
-    merlin:transform(
-        Forms,
-        fun
-            (Phase, Form, _) when Phase =:= enter orelse Phase =:= leaf ->
-                case Form of
-                    ?Q(SearchPattern) -> ?Q(ReplacementPattern);
-                    _ -> continue
-                end;
-            (_, _, _) ->
-                continue
-        end,
-        '_'
-    )
 ).
 
 -define(quickcheck(Property), ?quickcheck(Property, [])).
