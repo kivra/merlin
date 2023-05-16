@@ -75,7 +75,7 @@
 
 -ifdef(TEST).
 -export([
-    reset_variable_counter/0
+    reset_variable_counters/0
 ]).
 -endif.
 
@@ -543,7 +543,7 @@ annotate_bindings(Forms0) when is_list(Forms0) ->
         case Forms1 of
             [Form | _] ->
                 get_annotation(Form, env, ordsets:new());
-            _ ->
+            [] ->
                 ordsets:new()
         end,
     Tree = erl_syntax:form_list(Forms1),
@@ -596,7 +596,7 @@ get_bindings_by_type(Bindings, Type) when
 get_bindings_by_type(BindingsOrNode, Type) when ?is_binding_type(Type) ->
     case sets:is_set(BindingsOrNode) of
         true ->
-            error(badarg);
+            error(badarg, [BindingsOrNode, Type]);
         false ->
             get_bindings_by_type(get_annotations(BindingsOrNode), Type)
     end.
@@ -609,26 +609,13 @@ get_bindings_by_type(BindingsOrNode, Type) when ?is_binding_type(Type) ->
 %% @see erl_syntax_lib:annotate_bindings/2
 -spec get_bindings_with_type(bindings_or_node()) -> #{variable() := binding_type()}.
 get_bindings_with_type(#{bound := Bound, env := Env, free := Free}) ->
-    Bindings = ordsets:union([Env, Bound, Free]),
-    maps:from_list([
-        case ordsets:is_element(Bound, Binding) of
-            true ->
-                {Binding, bound};
-            false ->
-                case ordsets:is_element(Env, Binding) of
-                    true ->
-                        {Binding, env};
-                    false ->
-                        case ordsets:is_element(Free, Binding) of
-                            true ->
-                                {Binding, free};
-                            false ->
-                                error({missing_binding, Binding})
-                        end
-                end
-        end
-     || Binding <- Bindings
-    ]);
+    maps:merge(
+        maps:from_keys(Free, free),
+        maps:merge(
+            maps:from_keys(Env, env),
+            maps:from_keys(Bound, bound)
+        )
+    );
 get_bindings_with_type(Form) when is_tuple(Form) ->
     get_bindings_with_type(get_annotations(Form)).
 
@@ -954,7 +941,7 @@ merge_bindings(
 %% @private
 -spec maybe_node(bindings_or_node(), [atom() | variable()]) -> [variable()].
 maybe_node(Bindings, Variables) when
-    is_map(Bindings) orelse is_list(Bindings) andalso is_list(Variables)
+    (is_map(Bindings) orelse is_list(Bindings)) andalso is_list(Variables)
 ->
     ordsets:from_list(Variables);
 maybe_node(Form, Variables) when is_list(Variables) ->
@@ -971,7 +958,11 @@ var(Form, Name) when is_tuple(Form) andalso is_atom(Name) ->
     );
 var(Form, Var) when is_tuple(Form) andalso is_tuple(Var) ->
     ?assertNodeType(Form, variable),
-    erl_syntax:copy_attrs(Form, Var).
+    set_annotation(
+        erl_syntax:copy_attrs(Form, Var),
+        generated,
+        true
+    ).
 
 %% @private
 -spec var_name(variable()) -> atom().
@@ -1007,27 +998,49 @@ into_set(SetOrForm) ->
 
 -define(EXAMPLE_MODULE_FORMS, ?Q(?EXAMPLE_MODULE_SOURCE)).
 
+-record('merlin_lib:variable_counter', {
+    prefix = <<"__Var">> :: binary(),
+    suffix = <<"__">> :: binary()
+}).
+
 %% During testing we ignore the randomly generated N, and use the process
 %% dictionary to keep track of the next number. This is to allow writing
 %% deterministic tests.
 %%
 %% It use multiple counters, one per prefix/suffix combination. This makes it
 %% much easier to guess what the automatic variable will be.
-test_variable_formatter(Prefix0, Suffix0) ->
-    Prefix1 = iolist_to_binary(io_lib:format("~s", [Prefix0])),
-    Suffix1 = iolist_to_binary(io_lib:format("~s", [Suffix0])),
-    Key = {'merlin_lib:variable_counter', Prefix1, Suffix1},
+test_variable_formatter(Prefix, Suffix) ->
+    Key = #'merlin_lib:variable_counter'{
+        prefix = iolist_to_binary(io_lib:format("~s", [Prefix])),
+        suffix = iolist_to_binary(io_lib:format("~s", [Suffix]))
+    },
     N =
         case erlang:get(Key) of
             undefined -> 1;
             Number -> Number
         end,
     put(Key, N + 1),
-    binary_to_atom(iolist_to_binary(io_lib:format("~s~p~s", [Prefix1, N, Suffix1]))).
+    binary_to_atom(
+        iolist_to_binary(
+            io_lib:format("~s~p~s", [
+                Key#'merlin_lib:variable_counter'.prefix,
+                N,
+                Key#'merlin_lib:variable_counter'.suffix
+            ])
+        )
+    ).
 
 %% Resets the `test_variable_formatter' counter.
-reset_variable_counter() ->
-    erase('merlin_lib:variable_counter').
+reset_variable_counters() ->
+    lists:foreach(
+        fun
+            (#'merlin_lib:variable_counter'{} = Key) ->
+                erase(Key);
+            (_) ->
+                ok
+        end,
+        erlang:get_keys()
+    ).
 
 export_test_() ->
     maps:to_list(#{
@@ -1362,9 +1375,9 @@ get_ann(Form) ->
     lists:sort(erl_syntax:get_ann(Form)).
 
 add_new_variable_test_() ->
-    reset_variable_counter(),
+    reset_variable_counters(),
     Bindings0 = #{env => ordsets:new(), bound => ordsets:new(), free => ordsets:new()},
-    {setup, fun reset_variable_counter/0,
+    {setup, fun reset_variable_counters/0,
         maps:to_list(#{
             "binding" => fun() ->
                 Result0 = add_new_variable(Bindings0),

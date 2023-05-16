@@ -560,11 +560,9 @@ fold_merl_patterns([{MerlPattern, TemporaryVariable} | Replacements], Guard, Bod
 %% If given a list of nodes, they are additionally wrapped in a
 %% `begin Nodes end'.
 ok_tuple([Node]) ->
-    ok_tuple(Node);
+    ?Q("{ok, _@Node}");
 ok_tuple(Nodes) when is_list(Nodes) ->
-    ?Q("{ok, begin _@Nodes end}");
-ok_tuple(Node) ->
-    ?Q("{ok, _@Node}").
+    ?Q("{ok, begin _@Nodes end}").
 
 %% @doc Returns the given `Pattern' matched against the given `Argument',
 %% followed by the given `Body'.
@@ -899,10 +897,8 @@ has_quote_pattern_test_() ->
 transform_simple_test_() ->
     {
         foreach,
-        fun() ->
-            %% Reset automatic variable counter used during tests
-            erase()
-        end,
+        %% Reset automatic variable counter used during tests
+        fun merlin_lib:reset_variable_counters/0,
         [
             ?_transformTest(
                 "Single merl pattern w/o guard",
