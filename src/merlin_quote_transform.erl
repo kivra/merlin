@@ -119,8 +119,7 @@
 
 %% Used internally by the resulting code or macros
 -export([
-    switch/2,
-    set_location/2
+    switch/2
 ]).
 
 -include_lib("syntax_tools/include/merl.hrl").
@@ -176,8 +175,11 @@ switch(Arguments, []) when is_list(Arguments) ->
 switch(Arguments, [Clause | Clauses]) when
     is_list(Arguments) andalso is_function(Clause, length(Arguments))
 ->
-    try
-        switch_internal(Arguments, [Clause | Clauses])
+    try apply(Clause, Arguments) of
+        {ok, Value} ->
+            {ok, Value};
+        continue ->
+            switch(Arguments, Clauses)
     catch
         Class:Reason:Stacktrace0 ->
             Stacktrace1 = [
@@ -185,32 +187,6 @@ switch(Arguments, [Clause | Clauses]) when
              || {Module, _, _, _} = Frame <- Stacktrace0, Module =/= ?MODULE
             ],
             erlang:raise(Class, Reason, Stacktrace1)
-    end.
-
-%% @private
-%% @doc By dividing {@link switch/2} into two functions like this we get to
-%% keep tail recursion optimisation even though we use a `try'/`catch'.
-switch_internal(Arguments, [Clause | Clauses]) ->
-    case apply(Clause, Arguments) of
-        {ok, _} = Ok -> Ok;
-        continue -> switch(Arguments, Clauses)
-    end.
-
-%% Sets the given location on the given target.
-%% The `Location' can be either an {@link erl_anno:anno/0} or
-%% {@link merlin:ast/0, form} from which the information is copied. In this
-%% case all user annotaions are copied, not just the {@link erl_anno:anno/0}
-%% annotations.
-%%
-%% @see erl_anno:anno()
-%% @see erl_syntax:copy_attrs/2
-set_location(Location, Target) ->
-    case erl_anno:is_anno(Location) of
-        true ->
-            erl_syntax:set_pos(Target, Location);
-        false ->
-            ?assertIsForm(Location),
-            erl_syntax:copy_attrs(Location, Target)
     end.
 
 %% @private
@@ -743,13 +719,13 @@ raise_function_or_case_clause(CaseArgument0) ->
                 Frames
             ] = merlin_lib:new_variables(CaseArgument0, 3),
             RaiseFunctionClauseBody = ?Q([
-                "{current_stacktrace, [_@CurrentFrame0|_@Frames]} =",
-                "    erlang:process_info(self(), current_stacktrace),",
+                "{current_stacktrace, [_@CurrentFrame0 | _@Frames]} =",
+                "    erlang:process_info(erlang:self(), current_stacktrace),",
                 "_@CurrentFrame1 = erlang:setelement(",
                 "    4, _@CurrentFrame0, [_@FunctionArguments]",
                 "),",
                 "erlang:raise(",
-                "    error, function_clause, [_@CurrentFrame1|_@Frames]",
+                "    error, function_clause, [_@CurrentFrame1 | _@Frames]",
                 ")"
             ]),
             RaiseFunctionClauseBody
@@ -996,7 +972,7 @@ transform_simple_test_() ->
                                 __ValueVar1;
                             _ ->
                                 {current_stacktrace, [__Var3__ | __Var1__]} =
-                                    erlang:process_info(self(), current_stacktrace),
+                                    erlang:process_info(erlang:self(), current_stacktrace),
                                 __Var2__ = erlang:setelement(4, __Var3__, [__Arg3, __Arg2, __Arg1]),
                                 erlang:raise(error, function_clause, [__Var2__ | __Var1__])
                         end
@@ -1043,7 +1019,7 @@ transform_simple_test_() ->
                                 __ValueVar1;
                             _ ->
                                 {current_stacktrace, [__Var3__ | __Var1__]} =
-                                    erlang:process_info(self(), current_stacktrace),
+                                    erlang:process_info(erlang:self(), current_stacktrace),
                                 __Var2__ = erlang:setelement(4, __Var3__, [__Arg2, __Arg1]),
                                 erlang:raise(error, function_clause, [__Var2__ | __Var1__])
                         end
@@ -1080,7 +1056,7 @@ transform_simple_test_() ->
                                 __ValueVar1;
                             _ ->
                                 {current_stacktrace, [__Var3__ | __Var1__]} =
-                                    erlang:process_info(self(), current_stacktrace),
+                                    erlang:process_info(erlang:self(), current_stacktrace),
                                 __Var2__ = erlang:setelement(4, __Var3__, [__Arg1]),
                                 erlang:raise(error, function_clause, [__Var2__ | __Var1__])
                         end
@@ -1132,7 +1108,7 @@ transform_simple_test_() ->
                                 __ValueVar1;
                             _ ->
                                 {current_stacktrace, [__Var3__ | __Var1__]} =
-                                    erlang:process_info(self(), current_stacktrace),
+                                    erlang:process_info(erlang:self(), current_stacktrace),
                                 __Var2__ = erlang:setelement(4, __Var3__, [__Arg3, __Arg2, __Arg1]),
                                 erlang:raise(error, function_clause, [__Var2__ | __Var1__])
                         end
