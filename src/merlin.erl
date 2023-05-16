@@ -810,18 +810,14 @@ expand_callback_return({continue, Node1, Extra1}, _Node0, _Extra0) ->
     {continue, Node1, Extra1, []};
 expand_callback_return({Node1, Extra1}, _Node0, _Extra0) when is_tuple(Node1) ->
     {continue, Node1, Extra1, []};
-expand_callback_return(Nodes0, _Node0, Extra0) when is_list(Nodes0) ->
-    Nodes1 = erl_syntax:form_list(Nodes0),
-    Nodes2 = erl_syntax:flatten_form_list(Nodes1),
-    Nodes3 = erl_syntax:form_list_elements(Nodes2),
-    {continue, Nodes3, Extra0, []};
-expand_callback_return(Node1, Node0, Extra0) ->
+expand_callback_return(Nodes, _Node0, Extra0) when is_list(Nodes) ->
+    {continue, merlin_lib:flatten(Nodes), Extra0, []};
+expand_callback_return(Node1, _Node0, Extra0) ->
     case check_syntax(Node1) of
         form_list ->
-            Nodes = erl_syntax:form_list_elements(Node1),
-            expand_callback_return(Nodes, Node0, Extra0);
-        {error, _} = Error ->
-            {return, Node1, Extra0, [Error]};
+            {continue, merlin_lib:flatten(Node1), Extra0, []};
+        {error, Reason} ->
+            {return, Node1, Extra0, [{error, Reason}]};
         _ ->
             {continue, Node1, Extra0, []}
     end.

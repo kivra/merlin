@@ -13,6 +13,7 @@
 -export([
     export/2,
     file/1,
+    flatten/1,
     module/1,
     module_form/1,
     update_tree/2,
@@ -265,6 +266,16 @@ update_tree(Node, Groups) when is_list(Groups) ->
 update_tree(Node, Form) when is_tuple(Form) ->
     ?assertNodeType(Node, ?assertIsForm(Form)),
     erl_syntax:update_tree(Node, erl_syntax:subtrees(Form)).
+
+%% @doc Returns a flat list of nodes from the given
+%% {@link erl_syntax:form_list/1. form list} or list of nodes.
+-spec flatten(NodeOrNodes) -> [merlin:ast()] when
+    NodeOrNodes :: merlin:ast() | [NodeOrNodes].
+flatten(NodeOrNodes) ->
+    Nodes0 = erl_syntax:form_list(NodeOrNodes),
+    Nodes1 = erl_syntax:flatten_form_list(Nodes0),
+    Nodes2 = erl_syntax:form_list_elements(Nodes1),
+    Nodes2.
 
 %% @doc Returns the value of the given literal node as an Erlang term.
 %%
