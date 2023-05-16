@@ -18,17 +18,15 @@
             Guard ->
                 ok;
             _ ->
-                X__GuardSource = merlin_internal:format_merl_guard(?LINE, ??Guard),
-                io:format("Expected~n~s~nto match~n~s~n", [
-                    merlin_merl:format(X__Value),
-                    X__GuardSource
-                ]),
+                merlin_internal:print_merl_match_failure(??Guard, X__Value, #{
+                    filename => ?FILE
+                }),
                 erlang:error(
                     {assertMatch, [
                         {module, ?MODULE},
                         {line, ?LINE},
                         {expression, ??Expr},
-                        {pattern, X__GuardSource},
+                        {pattern, ??Guard},
                         {value, merlin:revert(X__Value)}
                     ]}
                 )
@@ -43,7 +41,9 @@ end).
 %% Merl compatible version of ?assertEqual/2
 %% For use with an existing/dynamic `Node', `?assertMerlEqual(Node, Expr)'
 %%
-%% On failure it pretty prints both the expected and actual syntax trees.
+%% On failure it pretty prints the diff between the expected and actual syntax
+%% trees.
+%%
 %% It also reverts both the {@link merl:tree/1. expected} and
 %% {@link merlin_revert/1. actual} syntax trees to make them easier to
 %% inspect and compare.
@@ -53,10 +53,9 @@ end).
             {ok, X__Variables} when is_list(X__Variables) ->
                 ok;
             error ->
-                io:format("Expected~n~s~n~nto equal~n~s~n", [
-                    merlin_merl:format(X__Value),
-                    merlin_merl:format(X__Expected)
-                ]),
+                merlin_internal:print_merl_equal_failure(X__Expected, X__Value, #{
+                    filename => ?FILE
+                }),
                 erlang:error(
                     {assertEqual, [
                         {module, ?MODULE},

@@ -82,7 +82,7 @@
 
 -define(log_exception(Class, Reason, Stacktrace),
     ?debug(
-        "~s(~tp)~n~s~n",
+        "~s(~tp)~n~ts~n",
         [Class, Reason, merlin_internal:format_stack(Stacktrace)]
     )
 ).
@@ -117,7 +117,7 @@ end).
     (fun(X__Forms, {current_stacktrace, X__Stacktrace}) ->
         {X__Format, X__Args} = merlin_internal:format_forms({??Expr " = ", X__Forms}),
         io:format(
-            X__Format ++ "~n~s~n",
+            X__Format ++ "~n~ts~n",
             X__Args ++ [merlin_internal:format_stack(X__Stacktrace)]
         ),
         X__Forms
@@ -129,7 +129,7 @@ end).
 
 -define(var(Expr), begin
     (fun(X__Term) ->
-        io:format("~s =~n~p~n", [??Expr, X__Term]),
+        io:format("~ts =~n~tp~n", [??Expr, X__Term]),
         X__Term
     end)(
         Expr
@@ -140,7 +140,7 @@ end).
 
 -define(vart(Expr), begin
     (fun(X__Term, {current_stacktrace, X__Stacktrace}) ->
-        io:format("~s =~n~p~n~s~n", [
+        io:format("~ts =~n~tp~n~ts~n", [
             ??Expr,
             X__Term,
             merlin_internal:format_stack(X__Stacktrace)
