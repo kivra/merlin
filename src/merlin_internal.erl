@@ -25,11 +25,11 @@
 -endif.
 
 %% @hidden
-%% @private
 %% @doc This is a helper for the ?level(A, B, C) macros.
 %% Unfortunately it can't be inlined because dialyzer complains about
-%% "Guard test ... can never succeed". Which is true, but not relevant in the
-%% context of a macro designed to be called in multiple different ways.
+%% "Guard test ... can never succeed". Which is technically true, but not
+%% relevant in the context of a macro designed to be called in multiple
+%% different ways.
 -spec log_macro(logger:level(), term(), term(), logger:metadata()) -> ok.
 log_macro(Level, Format, Metadata, MacroMetadata) when
     (not is_function(Format)) andalso is_map(Metadata)
@@ -38,6 +38,7 @@ log_macro(Level, Format, Metadata, MacroMetadata) when
 log_macro(Level, A, B, Metadata) ->
     logger:log(Level, A, B, Metadata).
 
+%% @hidden
 write_log_file() ->
     %% Only flush if our logger is active
     case lists:member(debug_log, logger:get_handler_ids()) of

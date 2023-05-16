@@ -20,7 +20,7 @@
 %%%             fun (enter, __Var1__, #{module := State}) ->
 %%%                     case __Var1__ of
 %%%                         ?Q("_@var") ->
-%%%                             {ok, success;
+%%%                             {ok, success};
 %%%                         _ ->
 %%%                             continue
 %%%                     end
@@ -111,7 +111,7 @@
 %%% @end
 -module(merlin_quote_transform).
 
-% -behaviour(parse_transform).
+%% -behaviour(parse_transform).
 
 -export([
     parse_transform/2
@@ -218,6 +218,10 @@ set_location(Location, Target) ->
 %% {@link merl_transform:parse_transform/2}.
 %%
 %% This is to allows easier testing.
+-spec transform(Forms, Options) -> FinalForms when
+    Forms :: [merlin:ast()],
+    Options :: [compile:option()],
+    FinalForms :: [merlin:ast()].
 transform([], _Options) ->
     [];
 transform(Forms, Options) ->
@@ -307,13 +311,13 @@ quote(enter, Form, #{module := Module}) ->
 quote(_, _, _) ->
     continue.
 
-%% @doc Is the given `Form' the match all pattern, aka underscore?
-is_underscore(Form) ->
-    erl_syntax:type(Form) =:= underscore.
+%% @doc Is the given node the match all pattern, aka underscore?
+is_underscore(Node) ->
+    erl_syntax:type(Node) =:= underscore.
 
-%% @doc Is the given `Form' a variable/binding?
-is_variable(Form) ->
-    erl_syntax:type(Form) =:= variable.
+%% @doc Is the given node a variable/binding?
+is_variable(Node) ->
+    erl_syntax:type(Node) =:= variable.
 
 %% @doc Will the given `Clause' always match?
 %%
@@ -346,7 +350,7 @@ is_unbound_variable(Pattern, Form0) ->
             false
     end.
 
-%% Is the given guard a valid guard expression?
+%% @doc Is the given guard a valid guard expression?
 %%
 %% It also accepts empty guards, since this is used to determine if the guard
 %% can be attached to a clause, or if it needs to be handled with a `try'
@@ -425,7 +429,7 @@ is_merl_switchable([Clause | Clauses]) ->
             false
     end.
 
-%% @doc Converts functions clauses, that may have multile patterns, to case
+%% @doc Converts functions clauses, that may have multiple patterns, to case
 %% clauses that may only have one pattern.
 %%
 %% It also marks these clauses with the `function_clause' annotation for
@@ -527,9 +531,9 @@ clause_to_fun(Clause0) ->
 %% The guard, if any, is attached to the innermost merl pattern/case, allowing
 %% it access to variables bound in all cases.
 %%
-%% In the resulting cases, if ant merl pattern won't match, `continue' is
-%% returned instead. It is up to the caller to wrap the body in a
-%% `{ok, _}' tuple.
+%% In the resulting cases, if any merl pattern won't match, `continue' is
+%% returned instead. It is up to the caller to wrap the body in a `{ok, _}'
+%% tuple.
 %%
 %% It tries to avoid useless cases, assigning variables directly, and avoiding
 %% `_' patterns entirely.
@@ -551,16 +555,16 @@ fold_merl_patterns([{MerlPattern, TemporaryVariable} | Replacements], Guard, Bod
         ?Q("continue")
     ).
 
-%% @doc Returns the given form, or forms, wrapped in a `{ok, Form}' tuple.
+%% @doc Returns the given node, or nodes, wrapped in a `{ok, Node}' tuple.
 %%
-%% If given a list of forms, they are additionally wrapped in a
-%% `begin Forms end'.
-ok_tuple([Form]) ->
-    ok_tuple(Form);
-ok_tuple(Forms) when is_list(Forms) ->
-    ?Q("{ok, begin _@Forms end}");
-ok_tuple(Form) ->
-    ?Q("{ok, _@Form}").
+%% If given a list of nodes, they are additionally wrapped in a
+%% `begin Nodes end'.
+ok_tuple([Node]) ->
+    ok_tuple(Node);
+ok_tuple(Nodes) when is_list(Nodes) ->
+    ?Q("{ok, begin _@Nodes end}");
+ok_tuple(Node) ->
+    ?Q("{ok, _@Node}").
 
 %% @doc Returns the given `Pattern' matched against the given `Argument',
 %% followed by the given `Body'.
@@ -643,35 +647,36 @@ join(OperatorName, [First | Expressions]) ->
         Expressions
     ).
 
-%% Returns the given form with all merl patterns replaced with temporary
+%% Returns the given node with all merl patterns replaced with temporary
 %% variables, together with those variables.
 %%
 %% It takes the current set of bindings from the first argument, and updates
 %% it with the temporary variables created during transformation.
--dialyzer({nowarn_function, replace_merl_with_temporary_variables/2}).
--spec replace_merl_with_temporary_variables(Parent, FormsToReplace) ->
-    {Parent, FormsToReplace, Replacements}
+% -dialyzer({nowarn_function, replace_merl_with_temporary_variables/2}).
+-spec replace_merl_with_temporary_variables(Clause, Patterns) ->
+    {Clause, PatternsWithoutMerl, Replacements}
 when
-    Parent :: merlin:ast(),
-    FormsToReplace :: merlin:ast(),
+    Clause :: merlin:ast(),
+    Patterns :: [merlin:ast()],
+    PatternsWithoutMerl :: [merlin:ast()],
     Replacements :: [{MerlPattern, TemporaryVariable}],
     MerlPattern :: merlin:ast(),
     TemporaryVariable :: merlin:ast().
-replace_merl_with_temporary_variables(Parent0, FormsToReplace) ->
+replace_merl_with_temporary_variables(Clause0, Patterns) when is_list(Patterns) ->
     State = #{
-        bindings => merlin_lib:get_annotations(Parent0),
+        bindings => merlin_lib:get_annotations(Clause0),
         replacements => []
     },
-    {Result, #{
+    {PatternsWithoutMerl, #{
         bindings := NewBindings,
         replacements := Replacements
     }} = merlin:transform(
-        FormsToReplace,
+        Patterns,
         fun replacement_transformer/3,
         State
     ),
-    Parent1 = merlin_lib:add_bindings(Parent0, NewBindings),
-    {Parent1, Result, Replacements}.
+    Clause1 = merlin_lib:add_bindings(Clause0, NewBindings),
+    {Clause1, PatternsWithoutMerl, Replacements}.
 
 %% @private
 replacement_transformer(
@@ -713,7 +718,7 @@ replacement_transformer(
 replacement_transformer(_, _, _) ->
     continue.
 
-%% @doc Returns a form, or forms, that {@link erlang:raise/3. raises} either
+%% @doc Returns a node, or nodes, that {@link erlang:raise/3. raises} either
 %% `function_clause' or `case_clause' as appropriately.
 %%
 %% It uses the `function_arguments' annotation to determine this. It also
@@ -752,11 +757,11 @@ raise_function_or_case_clause(CaseArgument0) ->
             RaiseFunctionClauseBody
     end.
 
-%% @doc Same as {@link update_clause/4}, copying both the guard and body.
+%% @equiv update_clause(Clause, Patterns, copy, copy)
 update_clause(Clause, Patterns) ->
     update_clause(Clause, Patterns, copy).
 
-%% @doc Same as {@link update_clause/4}, copying the body.
+%% @equiv update_clause(Clause, Patterns, Guard, copy)
 update_clause(Clause, underscore, Body) ->
     update_clause(Clause, underscore, none, Body);
 update_clause(Clause, Patterns, Guard) ->
@@ -764,11 +769,22 @@ update_clause(Clause, Patterns, Guard) ->
 
 %% @doc Updates the given `Clause' with the given `Patterns', `Guard' and
 %% `Body'.
-%% Instead of replacing, you can given the atom `copy' to copy one from the
-%% original. This is to allow partial updates.
-%% Finally, you can given `underscore' as the pattern as a shorthand for a
-%% match all pattern. This also clears any guard. If you want a match all
-%% clause with a guard, supply the match all pattern yourself.
+%%
+%% The `Patterns' may be `underscore', to indicate that the clause should match
+%% any pattern(s). This also clears any guard. If you want a match all clause
+%% with a guard, you need to use {@link erl_syntax:underscore/0} for the
+%% patterns.
+%%
+%% The `Guard' may be `none', to indicate that there is no guard.
+%% The `Body' may be a node or list of nodes.
+%%
+%% You may also use the atom `copy' for any of the arguments, to indicate that
+%% the corresponding part of the `Clause' should be copied over.
+-spec update_clause(Clause, Patterns, Guard, Body) -> merlin:erl_syntax_ast() when
+    Clause :: merlin:ast(),
+    Patterns :: copy | underscore | [merlin:ast()],
+    Guard :: copy | none | merlin:ast(),
+    Body :: copy | merlin:ast() | [merlin:ast()].
 update_clause(Clause, underscore, _, Body) ->
     Patterns0 = erl_syntax:clause_patterns(Clause),
     Patterns1 = lists:duplicate(length(Patterns0), underscore(Clause)),

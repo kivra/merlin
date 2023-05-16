@@ -4,10 +4,11 @@
 %%% The main function is {@link transform/3}, which let's you easily traverse
 %%% an {@link ast()}, optionally modify it, and carry a state.
 %%%
-%%% There's some of {@link annotate/2. helper} {@link analyze/1. functions}
-%%% that provides easy access to commonly needed information. For example the
-%%% current set of {@link erl_syntax_lib:annotate_bindings/2. bindings} and
-%%% the <abbr title="Module:Function/Arity">MFA</abbr> for every
+%%% There are a few {@link merlin_module:annotate/2. helper} &#0160;
+%%% {@link merlin_module:analyze/1. functions} that provides easy access to
+%%% commonly needed information. For example the current set of
+%%% {@link erl_syntax_lib:annotate_bindings/2. bindings} and the
+%%% <abbr title="Module:Function/Arity">MFA</abbr> for every
 %%% {@link erl_syntax:application/2. function call}.
 %%%
 %%% Finally, when you're done transforming {@link return/1} the result in the
@@ -34,22 +35,34 @@
 ]).
 
 %%%_* Types ------------------------------------------------------------------
+%% Syntax tree types
+-export_type([
+    ast/0,
+    erl_parse/0,
+    erl_syntax_ast/0,
+    error_marker/0,
+    warning_marker/0
+]).
+
+%% `transform/3' related types
 -export_type([
     action/0,
-    ast/0,
-    error_marker/0,
     phase/0,
+    transformer/0,
     transformer/1,
     transformer_return/1
 ]).
 
+%% Parse transform types, defined here because there's no `parse_transform'
+%% behaviour.
 -export_type([
     exceptions_grouped_by_file/0,
-    parse_transform_return/0
+    parse_transform_return/0,
+    parse_transform_return/1
 ]).
 
 %%%_* Includes ===============================================================
--include("log.hrl").
+-include("internal.hrl").
 
 -ifdef(TEST).
 -define(PROPER_NO_IMPORTS, true).
@@ -63,24 +76,20 @@
 -record(state, {
     file :: string(),
     module :: module(),
-    transformer :: transformer(Extra),
-    extra :: Extra,
+    transformer :: transformer(TransformerState),
+    transformer_state :: TransformerState,
     errors = [] :: [error_marker()],
     warnings = [] :: [warning_marker()],
     depth = 0 :: integer()
 }).
 
 -type error_marker() :: {error, marker_with_file()}.
+%% Represents a compile time error. Must match {@link erl_lint:error_info()}.
+
 -type warning_marker() :: {warning, marker_with_file()}.
+%% Represents a compile time warning. Must match {@link erl_lint:error_info()}.
 
--type marker_with_file() :: {File :: string(), exception_marker()}.
-%% {Type, {File, {Position, Module, Reason}}}.
-
--type exception_marker() ::
-    {Position :: erl_anno:location(), Module :: module(), Reason :: term()}.
-
--type exceptions_grouped_by_file() ::
-    [{File :: string(), [exception_marker()]}].
+-type marker_with_file() :: {File :: string(), erl_lint:error_info()}.
 
 -type parse_transform_return() ::
     parse_transform_return([ast()]).
@@ -89,32 +98,89 @@
     Forms
     | {warning, Forms, exceptions_grouped_by_file()}
     | {error, exceptions_grouped_by_file(), exceptions_grouped_by_file()}.
+%% Represents the return value from a parse transform. Defined here because
+%% there's no `parse_transform' behaviour.
+
+-type exceptions_grouped_by_file() ::
+    [{File :: string(), [erl_lint:error_info()]}].
+
+-type transformer() :: transformer(State :: term()).
+
+-type transformer(State) :: fun((phase(), ast(), State) -> transformer_return(State)).
+%% Represents the callback used by {@link transform/3}.
 
 -type phase() :: enter | leaf | exit.
+%% Represents the direction of the depth-first traversal through the
+%% {@link ast()}.
+%%
+%% @see transformer/3
 
--type ast() :: erl_syntax:syntaxTree().
+-type ast() :: erl_syntax_ast() | erl_parse() | erl_syntax:syntaxTree().
+%% Represents a syntax tree node. May be a tree or a leaf.
+
+-type erl_syntax_ast() ::
+    {tree, Type :: atom(), erl_syntax:syntaxTreeAttributes(), Data :: term()}
+    | {wrapper, Type :: atom(), erl_syntax:syntaxTreeAttributes(), Tree :: erl_parse()}.
+%% A bit dirty to know about the internal structure like this, but
+%% {@link erl_syntax:syntaxTree()} also includes the vanilla AST and dialyser
+%% doesn't always approve of that.
+
+-type erl_parse() ::
+    erl_parse:abstract_clause()
+    | erl_parse:abstract_expr()
+    | erl_parse:abstract_form()
+    | erl_parse:abstract_type()
+    | erl_parse:form_info()
+    | erl_parse:af_binelement(term())
+    | erl_parse:af_generator()
+    | erl_parse:af_remote_function().
+%% Copied from erl_syntax
 
 -type action() :: continue | delete | return | exceptions.
+%% Represents the action to take after calling the {@link transformer()}
+%% callback.
+%%
+%% <dl>
+%% <dt>`continue'</dt>
+%% <dd>means to continue traversing the {@link ast()}.</dd>
+%% <dt>`delete'</dt>
+%% <dd>means to delete the current node from the {@link ast()}.</dd>
+%% <dt>`return'</dt>
+%% <dd>means to stop traversing the {@link ast()} and return the current
+%%     node.</dd>
+%% <dt>`exceptions'</dt>
+%% <dd>means to stop traversing the {@link ast()} and return the given
+%%     exceptions.</dd>
+%% </dl>
 
--type transformer_return(Extra) ::
+-type transformer_return(State) ::
     ast()
-    | {ast(), Extra}
+    | {ast(), State}
     | continue
     | {continue, ast()}
-    | {continue, ast(), Extra}
+    | {continue, ast(), State}
     | return
     | {return, ast()}
-    | {return, ast(), Extra}
+    | {return, ast(), State}
     | delete
-    | {delete, Extra}
-    | {error, term()}
-    | {error, term(), Extra}
-    | {warning, term()}
-    | {warning, term(), ast()}
-    | {warning, term(), ast(), Extra}
-    | {exceptions, [{error | warning, term()}], ast(), Extra}.
-
--type transformer(Extra) :: fun((phase(), ast(), Extra) -> transformer_return(Extra)).
+    | {delete, State}
+    | {error, Reason :: term()}
+    | {error, Reason :: term(), State}
+    | {warning, Reason :: term()}
+    | {warning, Reason :: term(), ast()}
+    | {warning, Reason :: term(), ast(), State}
+    | {exceptions, [{error | warning, Reason :: term()}], ast(), State}.
+%% Represents the return value from the {@link transformer()} callback.
+%%
+%% The first element is the {@link action()}, the second the new or
+%% modified node or nodes, and the third the new state.
+%%
+%% Returning an atom is a shorthand for reusing the current node and state.
+%% Returning a two-tuple is a shorthand for reusing the current state.
+%%
+%% You may also return `{error, Reason} | {warning, Reason}' to generate a
+%% compile time warning. These will be propagated to `erl_lint'. You may also
+%% return a list of these errors and/or warnings.
 
 -type analysis() :: #{
     attributes := #{
@@ -265,22 +331,65 @@ then(Tree, Fun) when is_function(Fun, 1) ->
 %% @doc Transforms the given `Forms' using the given `Transformer' with the
 %% given `State'.
 %%
-%% This is done through three phases:
-%% 1, When you `enter' a subtree
-%% 2, When you encounter a leaf `node'
-%% 3, When you `exit' a subtree
+%% This is done thorugh a depth-first traversal of the given `Forms'.
 %%
-%% It's recommended to have a match-all clause to future proof your code.
--spec transform(Forms, transformer(Extra), Extra) ->
-    {parse_transform_return(Forms), Extra}
+%% <ul>
+%% <li>First `enter'ing each tree node (top-down)</li>
+%% <li>Then, when you encounter a `leaf' node, you both "enter" and "exit" the node</li>
+%% <li>Finally `exit'ing each tree node (bottom-up)</li>
+%% </ul>
+%%
+%% For example, if you just want to change a call to a specific function, you
+%% would just use the top-down `enter' phase.
+%%
+%% ```
+%% parse_transform(Forms, _Options) ->
+%%    transform(
+%%        Forms,
+%%        fun (enter, Form, _State) ->
+%%                case erl_syntax:type(Form) of
+%%                    %% Application is the name of a function call
+%%                    application ->
+%%                        Operator erl_syntax:application_operator(Form),
+%%                        case erl_syntax:type(Operator) =:= atom andalso
+%%                             erl_syntax:atom_value(Operator) =:= foo of
+%%                           true ->
+%%                                %% Change `foo(...)' to `my_module:foo(...)'
+%%                                %% using `merl' or `merlin_quote_transform'
+%%                                {return, ?Q("my_module:foo(123)")};
+%%                          false ->
+%%                               continue
+%%                       end;
+%%                    _ ->
+%%                        continue
+%%                 end;
+%%            (_, _, _) ->
+%%                continue
+%%         end,
+%%        state
+%%   ).
+%% '''
+%%
+%% Sometimes it is easier, or necessary, to use a bottom-up approach. You can
+%% use `exit' for that. Sometimes you need both, and here is where `merlin'
+%% really shines, as you can just pattern match of `enter' and `exit' in the
+%% same function.
+%%
+%% The latter shows up when you want to do some analysis on the way down, and
+%% then use that information on the way up.
+%%
+%% For a real world example see {@link merlin_quote_transform}. That one is
+%% also pretty handy for writing {@link transformer(). transformers}.
+-spec transform(Forms, transformer(State), State) ->
+    {parse_transform_return(Forms), State}
 when
     Forms :: [ast()].
-transform(Forms, Transformer, Extra) when is_function(Transformer, 3) ->
+transform(Forms, Transformer, TransformerState) when is_function(Transformer, 3) ->
     InternalState0 = #state{
         file = merlin_lib:file(Forms),
         module = merlin_lib:module(Forms),
         transformer = Transformer,
-        extra = Extra
+        transformer_state = TransformerState
     },
     set_logger_target(InternalState0),
     ?notice(
@@ -302,10 +411,10 @@ transform(Forms, Transformer, Extra) when is_function(Transformer, 3) ->
                 ?log_exception(Class, Reason, Stacktrace),
                 erlang:raise(Class, Reason, Stacktrace)
         end,
-    ?info("Final state ~tp", [InternalState1#state.extra]),
+    ?info("Final state ~tp", [InternalState1#state.transformer_state]),
     Forms2 = finalize(Forms1, InternalState1),
     ?show(Forms2),
-    {Forms2, InternalState1#state.extra}.
+    {Forms2, InternalState1#state.transformer_state}.
 
 %% @doc Returns the result from {@link transform/3}, or just the
 %% final forms, to an {@link erl_lint} compatible format.
@@ -324,9 +433,7 @@ return(Result) ->
     _ = merlin_internal:write_log_file(),
     then(Result, fun revert/1).
 
-%% @doc Reverts back from Syntax Tools format to Erlang forms.
-%%
-%% Accepts a list of forms, or a single form.
+%% @doc Returns the given node or nodes in {@link erl_parse} format.
 %%
 %% Copied from `parse_trans:revert_form/1' and slightly modified. The original
 %% also handles a bug in R16B03, but that is ancient history now.
@@ -596,8 +703,11 @@ find_forms_transformer(_, _, _) ->
 %%% Start transform helpers
 
 %% @private
--spec transform_internal(FormOrForms, #state{}) -> {ast(), #state{}} when
-    FormOrForms :: ast() | [FormOrForms].
+-spec transform_internal
+    (Node, #state{}) -> {Node, #state{}} when
+        Node :: ast();
+    (Forms, #state{}) -> {Forms, #state{}} when
+        Forms :: [ast()].
 transform_internal(Forms0, State0) when is_list(Forms0) ->
     {Forms1, State1} = lists:mapfoldl(fun transform_internal/2, State0, Forms0),
     {lists:flatten(Forms1), State1};
@@ -680,35 +790,39 @@ call_transformer(
     Node0,
     #state{
         transformer = Transformer,
-        extra = Extra0,
+        transformer_state = TransformerState0,
         errors = ExistingErrors,
         warnings = ExistingWarnings
     } = State0
 ) ->
     set_logger_target(line, erl_syntax:get_pos(Node0)),
-    set_logger_target(state, Extra0),
-    {Action, NodeOrNodes, Extra1, Reasons} = expand_callback_return(
-        Transformer(Phase, Node0, Extra0),
+    set_logger_target(state, TransformerState0),
+    {Action, NodeOrNodes, TransformerState1, Reasons} = expand_callback_return(
+        Transformer(Phase, Node0, TransformerState0),
         Node0,
-        Extra0
+        TransformerState0
     ),
-    log_call_transformer(Phase, Node0, Extra0, Action, NodeOrNodes, Extra1),
-    State1 = State0#state{extra = Extra1},
-    {FirstNode, {ExtraErrors, ExtraWarnings}} =
+    log_call_transformer(
+        Phase, Node0, TransformerState0, Action, NodeOrNodes, TransformerState1
+    ),
+    State1 = State0#state{transformer_state = TransformerState1},
+    {FirstNode, {TransformerStateErrors, TransformerStateWarnings}} =
         case NodeOrNodes of
             [Head | _] ->
-                ExtraReasons = lists:filter(fun is_error_or_warning/1, NodeOrNodes),
-                {Head, format_markers(ExtraReasons, Head, State1)};
+                TransformerStateReasons = lists:filter(
+                    fun is_error_or_warning/1, NodeOrNodes
+                ),
+                {Head, format_markers(TransformerStateReasons, Head, State1)};
             _ ->
                 {NodeOrNodes, {[], []}}
         end,
     {Errors, Warnings} = format_markers(Reasons, FirstNode, State1),
     State2 = State1#state{
-        errors = Errors ++ ExtraErrors ++ ExistingErrors,
-        warnings = Warnings ++ ExtraWarnings ++ ExistingWarnings
+        errors = Errors ++ TransformerStateErrors ++ ExistingErrors,
+        warnings = Warnings ++ TransformerStateWarnings ++ ExistingWarnings
     },
     case Action of
-        _ when length(Errors) + length(ExtraErrors) > 0 ->
+        _ when length(Errors) + length(TransformerStateErrors) > 0 ->
             {return, NodeOrNodes, State2};
         exceptions ->
             {continue, NodeOrNodes, State2};
@@ -729,97 +843,102 @@ is_error_or_warning(_) -> false.
 %% consistent 4-tuple.
 %%
 %% This makes the {@link call_transformer/3} much simpler to write.
--spec expand_callback_return(Return, ast(), Extra) ->
-    {action(), AST, Extra, Reasons0}
+-spec expand_callback_return(Return, Node, TransformerState) ->
+    {action(), NodeOrNodes, TransformerState, Exceptions}
 when
     Return ::
-        Action
-        | {continue | return, AST}
-        | {continue | return, AST, Extra}
+        continue
+        | delete
+        | return
+        | {continue | return, NodeOrNodes}
+        | {continue | return, NodeOrNodes, TransformerState}
         | {error | warning, Reason}
-        | {error, Reason, Extra}
-        | {warning, Reason, AST}
-        | {warning, Reason, AST, Extra}
-        | {exceptions, Reasons0}
-        | {exceptions, Reasons0, AST}
-        | {exceptions, Reasons0, AST, Extra}
-        | {action(), AST, Extra, Reasons0}
+        | {error, Reason, TransformerState}
+        | {warning, Reason, NodeOrNodes}
+        | {warning, Reason, NodeOrNodes, TransformerState}
+        | {exceptions, Exceptions}
+        | {exceptions, Exceptions, NodeOrNodes}
+        | {exceptions, Exceptions, NodeOrNodes, TransformerState}
+        | {action(), ast(), TransformerState, Exceptions}
         | {parse_transform, parse_transform_return()}
-        | {AST, Extra}
-        | AST,
-    Action :: continue | delete | return,
-    AST :: ast() | [ast()],
-    Extra :: term(),
+        | {NodeOrNodes, TransformerState}
+        | NodeOrNodes,
+    Node :: ast(),
+    NodeOrNodes :: ast() | [ast()],
+    TransformerState :: term(),
     Reason :: term(),
-    Reasons0 :: [{error | warning, Reason}].
-expand_callback_return(Action, Node0, Extra0) when
-    Action == continue orelse Action == delete orelse Action == return
+    Exceptions :: [{error, Reason} | {warning, Reason}].
+expand_callback_return(Action, Node0, TransformerState0) when
+    ?oneof(Action, continue, return, delete)
 ->
-    {Action, Node0, Extra0, []};
-expand_callback_return({Action, Reason}, Node0, Extra0) when
-    Action == error orelse Action == warning
+    {Action, Node0, TransformerState0, []};
+expand_callback_return({Action, Reason}, Node0, TransformerState0) when
+    ?oneof(Action, error, warning)
 ->
-    {exceptions, Node0, Extra0, [{Action, Reason}]};
-expand_callback_return({error, Reason, Extra1}, Node0, _Extra0) ->
-    {exceptions, Node0, Extra1, [{error, Reason}]};
-expand_callback_return({warning, Reason, Node1}, _Node0, Extra0) ->
-    {exceptions, Node1, Extra0, [{warning, Reason}]};
-expand_callback_return({warning, Reason, Node1, Extra1}, _Node0, _Extra0) ->
-    {exceptions, Node1, Extra1, [{warning, Reason}]};
-expand_callback_return({exceptions, Exceptions}, Node0, Extra0) ->
-    {exceptions, Node0, Extra0, Exceptions};
-expand_callback_return({exceptions, Exceptions, Node1}, _Node0, Extra0) ->
-    {exceptions, Node1, Extra0, Exceptions};
-expand_callback_return({exceptions, Exceptions, Node1, Extra1}, _Node0, _Extra0) ->
-    {exceptions, Node1, Extra1, Exceptions};
-expand_callback_return({delete, Extra1}, Node0, _Extra0) ->
-    {delete, Node0, Extra1, []};
-expand_callback_return({return, Node1}, _Node0, Extra0) ->
-    {return, Node1, Extra0, []};
-expand_callback_return({return, Node1, Extra1}, _Node0, _Extra0) ->
-    {return, Node1, Extra1, []};
+    {exceptions, Node0, TransformerState0, [{Action, Reason}]};
+expand_callback_return({error, Reason, TransformerState1}, Node0, _TransformerState0) ->
+    {exceptions, Node0, TransformerState1, [{error, Reason}]};
+expand_callback_return({warning, Reason, Node1}, _Node0, TransformerState0) ->
+    {exceptions, Node1, TransformerState0, [{warning, Reason}]};
+expand_callback_return(
+    {warning, Reason, Node1, TransformerState1}, _Node0, _TransformerState0
+) ->
+    {exceptions, Node1, TransformerState1, [{warning, Reason}]};
+expand_callback_return({exceptions, Exceptions}, Node0, TransformerState0) ->
+    {exceptions, Node0, TransformerState0, Exceptions};
+expand_callback_return({exceptions, Exceptions, Node1}, _Node0, TransformerState0) ->
+    {exceptions, Node1, TransformerState0, Exceptions};
+expand_callback_return(
+    {exceptions, Exceptions, Node1, TransformerState1}, _Node0, _TransformerState0
+) ->
+    {exceptions, Node1, TransformerState1, Exceptions};
+expand_callback_return({delete, TransformerState1}, Node0, _TransformerState0) ->
+    {delete, Node0, TransformerState1, []};
+expand_callback_return({return, Node1}, _Node0, TransformerState0) ->
+    {return, Node1, TransformerState0, []};
+expand_callback_return({return, Node1, TransformerState1}, _Node0, _TransformerState0) ->
+    {return, Node1, TransformerState1, []};
 %% This is for transformer wrappers
-expand_callback_return({Action, Node1, Extra1, Reasons}, _Node0, _Extra0) when
-    Action =:= continue orelse
-        Action =:= delete orelse
-        Action =:= return orelse
-        Action =:= error orelse
-        Action =:= warning orelse
-        Action =:= exceptions
+expand_callback_return({Action, Node1, TransformerState1, Reasons}, _Node0, _TransformerState0) when
+    ?oneof(Action, continue, return, delete, error, warning, exceptions)
 ->
-    {Action, Node1, Extra1, Reasons};
+    {Action, Node1, TransformerState1, Reasons};
 %% This is for wrapping full blown parse transforms
 expand_callback_return(
-    {parse_transform, {warning, Forms, Warnings0}, Extra1},
+    {parse_transform, {warning, Forms, Warnings0}, TransformerState1},
     _Node0,
-    _Extra0
+    _TransformerState0
 ) ->
     Warnings1 = ungroup_exceptions(warning, Warnings0),
-    {exceptions, Forms, Extra1, Warnings1};
+    {exceptions, Forms, TransformerState1, Warnings1};
 expand_callback_return(
-    {parse_transform, {error, Errors0, Warnings0, Extra1}},
+    {parse_transform, {error, Errors0, Warnings0, TransformerState1}},
     Node0,
-    _Extra0
+    _TransformerState0
 ) ->
     Errors1 = ungroup_exceptions(warning, Errors0),
     Warnings1 = ungroup_exceptions(warning, Warnings0),
-    {exceptions, Node0, Extra1, Errors1 ++ Warnings1};
-expand_callback_return({parse_transform, Forms, Extra1}, _Node0, _Extra0) ->
-    {return, Forms, Extra1, []};
-expand_callback_return({continue, Node1, Extra1}, _Node0, _Extra0) ->
-    {continue, Node1, Extra1, []};
-expand_callback_return({Node1, Extra1}, _Node0, _Extra0) when is_tuple(Node1) ->
-    {continue, Node1, Extra1, []};
-expand_callback_return(Nodes, _Node0, Extra0) when is_list(Nodes) ->
-    {continue, merlin_lib:flatten(Nodes), Extra0, []};
-expand_callback_return(Node1, _Node0, Extra0) ->
+    {exceptions, Node0, TransformerState1, Errors1 ++ Warnings1};
+expand_callback_return({parse_transform, Forms, TransformerState1}, _Node0, _TransformerState0) ->
+    {return, Forms, TransformerState1, []};
+expand_callback_return(
+    {continue, Node1, TransformerState1}, _Node0, _TransformerState0
+) ->
+    {continue, Node1, TransformerState1, []};
+expand_callback_return({Node1, TransformerState1}, _Node0, _TransformerState0) when
+    is_tuple(Node1)
+->
+    {continue, Node1, TransformerState1, []};
+expand_callback_return(Nodes, _Node0, TransformerState0) when is_list(Nodes) ->
+    {continue, merlin_lib:flatten(Nodes), TransformerState0, []};
+expand_callback_return(Node1, _Node0, TransformerState0) ->
     case check_syntax(Node1) of
         form_list ->
-            {continue, merlin_lib:flatten(Node1), Extra0, []};
+            {continue, merlin_lib:flatten(Node1), TransformerState0, []};
         {error, Reason} ->
-            {return, Node1, Extra0, [{error, Reason}]};
+            {return, Node1, TransformerState0, [{error, Reason}]};
         _ ->
-            {continue, Node1, Extra0, []}
+            {continue, Node1, TransformerState0, []}
     end.
 
 %% @private
@@ -907,7 +1026,7 @@ finalize(_Tree, #state{errors = Errors, warnings = Warnings}) ->
     {error, group_by_file(Errors), group_by_file(Warnings)}.
 
 %% @private
--spec group_by_file(Exceptions) -> [{File :: string(), [exception_marker()]}] when
+-spec group_by_file(Exceptions) -> [{File :: string(), [erl_lint:error_info()]}] when
     Exceptions :: [error_marker() | warning_marker() | marker_with_file()].
 group_by_file(Exceptions) ->
     maps:to_list(lists:foldl(fun group_by_file/2, #{}, Exceptions)).
@@ -915,7 +1034,7 @@ group_by_file(Exceptions) ->
 %% @private
 -spec group_by_file(Exception, Files) -> Files when
     Exception :: error_marker() | warning_marker() | marker_with_file(),
-    Files :: #{File => [exception_marker()]},
+    Files :: #{File => [erl_lint:error_info()]},
     File :: string().
 group_by_file(
     {Type, {File, {Position, FormattingModule, _Reason}} = Marker},
@@ -936,14 +1055,14 @@ group_by_file({File, Marker}, Files) ->
 %% Logger helpers
 
 %% @private
-log_call_transformer(Phase, NodeIn, ExtraIn, Action, NodeOrNodes, ExtraOut) ->
+log_call_transformer(Phase, NodeIn, TransformerStateIn, Action, NodeOrNodes, TransformerStateOut) ->
     NodeOut =
         case NodeOrNodes of
             [Head | _] -> Head;
             _ -> NodeOrNodes
         end,
     set_logger_target(line, erl_syntax:get_pos(NodeOut)),
-    set_logger_target(state, ExtraOut),
+    set_logger_target(state, TransformerStateOut),
     ?info(
         if
             is_list(NodeOrNodes) -> "~s ~s -> ~s [~s, ...]";
@@ -955,16 +1074,16 @@ log_call_transformer(Phase, NodeIn, ExtraIn, Action, NodeOrNodes, ExtraOut) ->
         lists:flatten(
             lists:join($\n, [
                 "NodeIn = ~s",
-                "ExtraIn = ~tp",
+                "TransformerStateIn = ~tp",
                 "NodeOrNodes = ~s",
-                "ExtraOut = ~tp"
+                "TransformerStateOut = ~tp"
             ])
         ),
         [
-            merlin_internal:format_forms(NodeIn),
-            ExtraIn,
-            merlin_internal:format_forms(NodeOrNodes),
-            ExtraOut
+            merlin_internal:format(NodeIn),
+            TransformerStateIn,
+            merlin_internal:format(NodeOrNodes),
+            TransformerStateOut
         ]
     ).
 
@@ -1036,7 +1155,6 @@ unset_logger_target(Key) ->
 
 %%%_* Tests ==================================================================
 -ifdef(TEST).
--include("internal.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 examples_test_() ->

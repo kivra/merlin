@@ -16,8 +16,9 @@
 %% Multiple are needed as some commas are interpreted as arguments to the
 %% macro, while others are ignored. Maybe because they are nested?
 %%
-%% These also use the parser feature of joining string literals, e.g. if you
+%% These use the parser feature of joining string literals, e.g. if you
 %% write `"foo" "bar"' it gets parsed as if you had written `"foobar"'.
+%%
 %% They also append a period to finish the form, as that can't be provided
 %% inside a macro call. Doing that would end the macro prematurely.
 -define(QUOTE(Form), ?Q(??Form ".")).
@@ -50,4 +51,27 @@
                 ]}
             )
     end
+).
+
+%% Poor mans `in' operator
+-define(oneof(Value, Alt1, Alt2), (Value =:= Alt1 orelse Value =:= Alt2)).
+
+%% Poor mans `in' operator
+-define(oneof(Value, Alt1, Alt2, Alt3),
+    (Value =:= Alt1 orelse ?oneof(Value, Alt2, Alt3))
+).
+
+%% Poor mans `in' operator
+-define(oneof(Value, Alt1, Alt2, Alt3, Alt4),
+    (Value =:= Alt1 orelse ?oneof(Value, Alt2, Alt3, Alt4))
+).
+
+%% Poor mans `in' operator
+-define(oneof(Value, Alt1, Alt2, Alt3, Alt4, Alt5),
+    (Value =:= Alt1 orelse ?oneof(Value, Alt2, Alt3, Alt4, Alt5))
+).
+
+%% Poor mans `in' operator
+-define(oneof(Value, Alt1, Alt2, Alt3, Alt4, Alt5, Alt6),
+    (Value =:= Alt1 orelse ?oneof(Value, Alt2, Alt3, Alt4, Alt5, Alt6))
 ).

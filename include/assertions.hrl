@@ -3,7 +3,7 @@
 -ifdef(NOASSERT).
 -define(assertMerlMatch(Guard, Expr), ok).
 -define(assertMerlEqual(Expected, Expr), ok).
--define(assertIsForm(Expr), ok).
+-define(assertIsNode(Expr), ok).
 -define(assertNodeType(Expr, Type), ok).
 -else.
 %% Merl compatible version of ?assertEqual/2
@@ -41,11 +41,12 @@ end).
 -define(_assertMerlMatch(Guard, Expr), ?_test(?assertMerlMatch(Guard, Expr))).
 
 %% Merl compatible version of ?assertEqual/2
-%% For use with an existing/dynamic `Form', `?assertMerlEqual(Form, Expr)'
+%% For use with an existing/dynamic `Node', `?assertMerlEqual(Node, Expr)'
 %%
 %% On failure it pretty prints both the expected and actual syntax trees.
 %% It also reverts both the {@link merl:tree/1. expected} and
-%% {@link merlin_revert/1. actual} syntax trees to make it easier to compare.
+%% {@link merlin_revert/1. actual} syntax trees to make them easier to
+%% inspect and compare.
 -define(assertMerlEqual(Expected, Expr),
     ((fun(X__Expected, X__Value) ->
         case merl:match(X__Expected, X__Value) of
@@ -72,10 +73,10 @@ end).
 ).
 -define(_assertMerlEqual(Expected, Expr), ?_test(?assertMerlEqual(Expected, Expr))).
 
-%% Asserts that the given `Expr' is a valid {@link erl_syntax} form.
+%% Asserts that the given `Expr' is a valid {@link erl_syntax} node.
 %%
-%% Returns the type of the form.
--define(assertIsForm(Expr), begin
+%% Returns the type of the node.
+-define(assertIsNode(Expr), begin
     (fun(X__Node) ->
         try erl_syntax:type(X__Node) of
             __Type__ -> __Type__
@@ -99,7 +100,7 @@ end).
     )
 end).
 
-%% Asserts that the given `Expr' is a valid form with the given `Type'.
+%% Asserts that the given `Expr' is a valid node with the given `Type'.
 -define(assertNodeType(Expr, Type), begin
     (fun
         (X__TypeOfExpr, X__ExpectedType) when X__TypeOfExpr =:= X__ExpectedType ->
@@ -115,7 +116,7 @@ end).
                 ]}
             )
     end)(
-        ?assertIsForm(Expr), Type
+        ?assertIsNode(Expr), Type
     )
 end).
 -endif.
