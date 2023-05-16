@@ -6,10 +6,9 @@
 
 %%%_* Exports ================================================================
 -export([
-    export_all/1,
     eunit/1,
+    export_all/1,
     format_forms/1,
-    format_merl_guard/2,
     format_stack/1,
     format_using_erl_error/2,
     fun_to_mfa/1,
