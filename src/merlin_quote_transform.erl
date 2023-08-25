@@ -226,6 +226,8 @@ quote(enter, Form, #{module := Module}) ->
                 "Detected quote pattern in ~s:~s/~p",
                 [Module, merlin_lib:value(Name), Arity]
             ),
+            %% Silence unused variable warning if the logging above is disabled
+            _ = Module,
             Variables = merlin_lib:new_variables(Form, Arity, "__Arg"),
             CaseArgument0 =
                 case Arity of

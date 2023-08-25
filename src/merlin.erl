@@ -1085,7 +1085,13 @@ log_call_transformer(Phase, NodeIn, TransformerStateIn, Action, NodeOrNodes, Tra
             merlin_internal:format(NodeOrNodes),
             TransformerStateOut
         ]
-    ).
+    ),
+    %% Silence unused variable  warning if the logging above is disabled
+    _ = Phase,
+    _ = NodeIn,
+    _ = TransformerStateIn,
+    _ = Action,
+    ok.
 
 %% @private
 update_file(Form, State) ->
