@@ -7,21 +7,29 @@
 
 %%%_* Exports ================================================================
 -export([
-    eunit/1,
-    export_all/1,
+    diff/2,
     format/1,
     format/2,
     format_forms/1,
     format_stack/1,
     format_using_erl_error/2,
+    format_source_lines/2,
     fun_to_mfa/1,
     log_macro/4,
     print_merl_match_failure/3,
     print_merl_equal_failure/3,
     print_stacktrace/1,
-    quote/3,
-    split_by/2,
     write_log_file/0
+]).
+
+-export([
+    maybe_get_file_attribute/1
+]).
+
+-export([
+    export_all/1,
+    parse/1,
+    split_by/2
 ]).
 
 -ifdef(MERLIN_INTERNAL_EXPORT_ALL).
@@ -80,15 +88,16 @@ format(Node, Options0) ->
 
 %% @private
 default_formatting_options(Options) ->
-    Linewidth1 = case Options of
-        #{linewidth := Linewidth0} ->
-            Linewidth0;
-        _ ->
-            case io:columns() of
-                {ok, Value} -> Value;
-                {error, enotsup} -> 120
-            end
-    end,
+    Linewidth1 =
+        case Options of
+            #{linewidth := Linewidth0} ->
+                Linewidth0;
+            _ ->
+                case io:columns() of
+                    {ok, Value} -> Value;
+                    {error, enotsup} -> 120
+                end
+        end,
     maps:to_list(
         maps:merge(
             #{
@@ -118,7 +127,7 @@ format_node(Node0, Options0) ->
     Node1 = merlin:revert(Node0),
     Source = erl_prettypr:format(Node1, Options0),
     Options1 =
-        case merlin_lib:get_annotation(Node0, file, none) of
+        case merlin_annotations:get(Node0, file, none) of
             none -> Options0;
             File -> lists:keystore(filename, 1, Options0, {filename, File})
         end,
@@ -167,10 +176,7 @@ print_merl_match_failure(GuardSource, Actual, Options) ->
         end,
     io:format(
         "assertMerlMatch failed\nDifference:\n~ts\n", [
-            lists:map(
-                fun format_diff/1,
-                lists:flatten(diff_words(tdiff:diff(FormattedMacro, FormattedActual)))
-            )
+            diff(FormattedMacro, FormattedActual)
         ]
     ).
 
@@ -180,10 +186,7 @@ print_merl_equal_failure(Expected, Actual, Options) ->
     FormattedActual = format_source_lines(Actual, Options),
     io:format(
         "assertMerlEqual failed\nDifference:\n~ts\n", [
-            lists:map(
-                fun format_diff/1,
-                lists:flatten(diff_words(tdiff:diff(FormattedExpected, FormattedActual)))
-            )
+            diff(FormattedExpected, FormattedActual)
         ]
     ).
 
@@ -193,6 +196,9 @@ format_source_lines(SourceOrNodeOrNodes, Options) ->
     Lines0 = string:split(Source1, <<"\n">>, all),
     Lines1 = [unicode:characters_to_list([Line, "\n"]) || Line <- Lines0],
     Lines1.
+
+diff(Expected, Actual) ->
+    lists:map(fun format_diff/1, lists:flatten(diff_words(tdiff:diff(Expected, Actual)))).
 
 diff_words([]) ->
     [];
@@ -308,6 +314,23 @@ print_stacktrace(Forms) ->
     {Format, Args} = format_forms(Forms),
     io:format(Format, Args).
 
+%%% End logging helpers ------------------------------------------------------
+
+%% @private
+maybe_get_file_attribute(Form) ->
+    case erl_syntax:type(Form) of
+        attribute ->
+            case erl_syntax:atom_value(erl_syntax:attribute_name(Form)) of
+                file ->
+                    [Filename, _Line] = erl_syntax:attribute_arguments(Form),
+                    erl_syntax:string_value(Filename);
+                _ ->
+                    false
+            end;
+        _ ->
+            false
+    end.
+
 %% @doc Splits `List' using `Fun' at the element for which it returns `true'.
 %% That element then returned together with the element in question.
 %% If there's no such element, this returns `undefined' instead.
@@ -348,34 +371,22 @@ export_all(Module) when is_atom(Module) ->
     ),
     code:load_binary(Module, Beamfile, Beam1).
 
-%% @doc Works like {@link merl:quote/1}, but also accepts
-%% {@link erl_syntax:string/1. string nodes}. Instead of throwing
-%% `{error, Reason}', it returns a valid
-%% <a href="https://erlang.org/doc/man/erl_parse.html#errorinfo">
-%% error info</a>.
-%%
-%% The first argument is a file string (or node) and is used for the
-%% <a href="https://erlang.org/doc/man/erl_parse.html#errorinfo">`errorinfo'</a>
-quote(File0, Line0, Source0) ->
-    File1 = safe_value(File0),
-    Line1 = safe_value(Line0),
-    Source1 = safe_value(Source0),
-    try merl:quote(Line1, Source1) of
-        AST ->
-            {ok, AST}
-    catch
-        throw:{error, SyntaxError} ->
-            {error, {File1, {Line1, ?MODULE, SyntaxError}}}
-    end.
-
-%% @private
-safe_value(Node) when is_tuple(Node) ->
-    merlin_lib:value(Node);
-safe_value(Value) ->
-    Value.
-
-eunit(Tests) ->
-    eunit:test([
-        {timeout, 60 * 60, Test}
-     || Test <- Tests
-    ]).
+parse(Module) ->
+    CompileOptions = proplists:get_value(options, Module:module_info(compile)),
+    SourceFile = merlin_module:find_source(Module),
+    Options = [
+        {location, {1, 1}},
+        {includes, [Include || {i, Include} <- CompileOptions]},
+        {macros, [
+            case Macro of
+                {d, MacroName} ->
+                    MacroName;
+                {d, MacroName, MacroValue} ->
+                    {MacroName, MacroValue}
+            end
+         || Macro <- CompileOptions,
+            is_tuple(Macro) andalso element(1, Macro) =:= d
+        ]}
+    ],
+    {ok, Forms} = epp:parse_file(SourceFile, Options),
+    Forms.

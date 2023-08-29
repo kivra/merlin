@@ -4,13 +4,13 @@ concurrency:
   group: ${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 env:
-  OTP_VERSION: "25.0"
-  REBAR3_VERSION: "3.18.0"
+  OTP_VERSION: "25"
+  REBAR3_VERSION: "3.22"
   ERL_FLAGS: "-enable-feature maybe_expr"
 
 jobs:
   compile-deps:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
       - uses: erlef/setup-beam@v1
@@ -28,10 +28,12 @@ jobs:
           path: |
             _build/*/*/*
             ebin
-          key: deps-v1-${{ runner.os }}-${{ env.OTP_VERSION }}-${{ env.REBAR3_VERSION }}-${{ hashFiles('rebar.*') }}
+          key: deps-${{ runner.os }}-${{ env.OTP_VERSION }}-${{ env.REBAR3_VERSION }}-${{ hashFiles('rebar.*') }}
       - name: Compile deps
         if: steps.cache.outputs.cache-hit != 'true'
-        run: rebar3 as test compile --deps_only
+        run: |
+          rebar3 compile --deps_only
+          rebar3 as test compile --deps_only
 
   compile:
     needs: [compile-deps]
@@ -53,7 +55,7 @@ jobs:
           path: |
             _build/*/*/*
             ebin
-          key: deps-v1-${{ runner.os }}-${{ env.OTP_VERSION }}-${{ env.REBAR3_VERSION }}-${{ hashFiles('rebar.*') }}
+          key: deps-${{ runner.os }}-${{ env.OTP_VERSION }}-${{ env.REBAR3_VERSION }}-${{ hashFiles('rebar.*') }}
       - name: Fetch workspace from cache
         uses: actions/cache@v3
         id: cached-workspace
@@ -63,31 +65,9 @@ jobs:
             ebin
           key: workspace-${{ github.ref }}
       - name: Compile
-        run: rebar3 as test compile
-
-  xref:
-    needs: [compile]
-    runs-on: ubuntu-20.04
-    steps:
-      - uses: actions/checkout@v3
-      - uses: erlef/setup-beam@v1
-        with:
-          otp-version: "${{ env.OTP_VERSION }}"
-          rebar3-version: "${{ env.REBAR3_VERSION }}"
-      - name: Configure SSH key
-        uses: ./.github/actions/configure-ssh-key
-        with:
-          ssh_key: ${{ secrets.PRIVATE_SSH_KEY }}
-      - name: Fetch workspace from cache
-        uses: actions/cache@v3
-        id: cached-workspace
-        with:
-          path: |
-            _build/*/*/*
-            ebin
-          key: workspace-${{ github.ref }}
-      - name: Run xref
-        run: rebar3 xref
+        run: |
+          rebar3 compile
+          rebar3 as test compile
 
   ct:
     needs: [compile]
@@ -162,3 +142,27 @@ jobs:
             workspace-${{ github.ref }}
       - name: Run Dialyzer
         run: rebar3 dialyzer
+
+  xref:
+    needs: [compile]
+    runs-on: ubuntu-20.04
+    steps:
+      - uses: actions/checkout@v3
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "${{ env.OTP_VERSION }}"
+          rebar3-version: "${{ env.REBAR3_VERSION }}"
+      - name: Configure SSH key
+        uses: ./.github/actions/configure-ssh-key
+        with:
+          ssh_key: ${{ secrets.PRIVATE_SSH_KEY }}
+      - name: Fetch workspace from cache
+        uses: actions/cache@v3
+        id: cached-workspace
+        with:
+          path: |
+            _build/*/*/*
+            ebin
+          key: workspace-${{ github.ref }}
+      - name: Run xref
+        run: rebar3 xref

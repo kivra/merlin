@@ -1,13 +1,23 @@
+-ifndef(MERLIN_ASSERTIONS_HRL).
+-define(MERLIN_ASSERTIONS_HRL, true).
+
 -include_lib("stdlib/include/assert.hrl").
 
 -ifdef(NOASSERT).
+-define(if_asserting(Block), ok).
 -define(assertMerlMatch(Guard, Expr), ok).
 -define(assertMerlEqual(Expected, Expr), ok).
 -define(assertIsNode(Expr), ok).
 -define(assertNodeType(Expr, Type), ok).
+-define(assertRegexpMatch(Regexp, Subject), ok).
 -else.
+%% Helper for compiling away code when assertions are disabled
+-define(if_asserting(Block), Block).
+
 %% Merl compatible version of ?assertEqual/2
-%% For use with merls `?Q/1' macro, `?assertMerlMatch(?Q(...) when ..., Expr)'
+%%
+%% For use with {@link merl. merls} `?Q/1' macro,
+%% `?assertMerlMatch(?Q(...) when ..., Expr)'
 %%
 %% On failure it pretty prints both the guard and matched value.
 %% It also reverts both the {@link merl:tree/1. expected} and
@@ -39,6 +49,7 @@ end).
 -define(_assertMerlMatch(Guard, Expr), ?_test(?assertMerlMatch(Guard, Expr))).
 
 %% Merl compatible version of ?assertEqual/2
+%%
 %% For use with an existing/dynamic `Node', `?assertMerlEqual(Node, Expr)'
 %%
 %% On failure it pretty prints the diff between the expected and actual syntax
@@ -118,4 +129,30 @@ end).
         ?assertIsNode(Expr), Type
     )
 end).
+
+-define(assertRegexpMatch(Regexp, Subject), begin
+    (fun(X__Subject, X__Regexp) ->
+        case re:run(X__Subject, X__Regexp, [{capture, none}]) of
+            match ->
+                ok;
+            nomatch ->
+                error(assertMatch, [
+                    {module, ?MODULE},
+                    {line, ?LINE},
+                    {expression,
+                        unicode:characters_to_list(
+                            io_lib:format("re:run(~s, ~tp, [{capture, none}])", [
+                                ??Subject, X__Regexp
+                            ])
+                        )},
+                    {pattern, "{match, _}"},
+                    {value, X__Subject}
+                ])
+        end
+    end)(
+        Subject, Regexp
+    )
+end).
+
+-endif.
 -endif.
