@@ -56,6 +56,7 @@ name(Form) ->
 %% AnnotatedForms = merlin_module:annotate(Forms),
 %% {ok, ModuleArguments} = merlin_attributes:find(Forms, module),
 %% #{module := _} = merlin_annotations:get(ModuleArguments, analysis).
+%% '''
 -spec find(Forms, Name) -> {ok, [merlin:ast()]} | {error, notfound} when
     Forms :: [merlin:ast()],
     Name :: atom().
