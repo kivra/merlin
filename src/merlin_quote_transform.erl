@@ -1,3 +1,4 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%% @doc Extends {@link merl} to allow patterns with `?Q/1' macro arbitrarily
 %%% nested, as well as use those patterns directly in function heads.
 %%%
@@ -13,14 +14,14 @@
 %%%
 %%% It becomes something like:
 %%% ```
-%%% func(__Arg1, __Arg2, __Arg3) ->
+%%% func(Arg1, Arg2, Arg3) ->
 %%%     case merlin_quote_transform:switch(
-%%%         [__Arg1, __Arg2, __Arg3],
+%%%         [Arg1, Arg2, Arg3],
 %%%         [
-%%%             fun (enter, __Var1__, #{module := State}) ->
-%%%                     case __Var1__ of
+%%%             fun (enter, Var1, #{module := State}) ->
+%%%                     case Var1 of
 %%%                         ?Q("_@var") ->
-%%%                             {ok, success;
+%%%                             {ok, success};
 %%%                         _ ->
 %%%                             continue
 %%%                     end
@@ -29,13 +30,13 @@
 %%%             end
 %%%         ]
 %%%     ) of
-%%%         {ok, __ValueVar1} -> __ValueVar1;
+%%%         {ok, ValueVar1} -> ValueVar1;
 %%%         _ ->
 %%%             error(function_clause)
 %%%     end.
 %%% '''
 %%%
-%%% Which then merl expands to match `?Q("_@Var") on `__Arg2'/`__Var2__'.
+%%% Which then merl expands to match `?Q("_@Var") on `Arg2'/`Var1'.
 %%%
 %%% Another example:
 %%% ```
@@ -109,23 +110,36 @@
 %%%
 %%% That design took a long time to settle on, but now it works.
 %%% @end
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%%%_* Module declaration =====================================================
 -module(merlin_quote_transform).
 
-% -behaviour(parse_transform).
+%%%_* Behaviours =============================================================
+%% -behaviour(parse_transform).
 
+%%%_* Exports ================================================================
+%%%_ * Callbacks -------------------------------------------------------------
 -export([
     parse_transform/2
 ]).
 
+%%%_ * API -------------------------------------------------------------------
 %% Used internally by the resulting code or macros
 -export([
-    switch/2,
-    set_location/2
+    switch/2
 ]).
 
+%%%_* Includes ===============================================================
 -include_lib("syntax_tools/include/merl.hrl").
--include("internal.hrl").
+-include("assertions.hrl").
+-include("log.hrl").
 
+-ifdef(TEST).
+-include("merlin_test.hrl").
+-endif.
+
+%%%_* Macros =================================================================
 -define(ppc(Clauses), begin
     erlang:apply(
         io,
@@ -158,10 +172,13 @@ end).
     io:nl()
 end).
 
+%%%_* Code ===================================================================
+%%%_ * Callbacks -------------------------------------------------------------
 parse_transform(Forms, Options) ->
     FinalForms = transform(Forms, Options),
     return(FinalForms, Options).
 
+%%%_ * API -------------------------------------------------------------------
 %% @private
 %% @doc Runtime function that correctly emulates a `case' statement.
 %% It's to be considered an implementation detail even though it is exported.
@@ -176,8 +193,11 @@ switch(Arguments, []) when is_list(Arguments) ->
 switch(Arguments, [Clause | Clauses]) when
     is_list(Arguments) andalso is_function(Clause, length(Arguments))
 ->
-    try
-        switch_internal(Arguments, [Clause | Clauses])
+    try apply(Clause, Arguments) of
+        {ok, Value} ->
+            {ok, Value};
+        continue ->
+            switch(Arguments, Clauses)
     catch
         Class:Reason:Stacktrace0 ->
             Stacktrace1 = [
@@ -187,47 +207,26 @@ switch(Arguments, [Clause | Clauses]) when
             erlang:raise(Class, Reason, Stacktrace1)
     end.
 
-%% @private
-%% @doc By dividing {@link switch/2} into two functions like this we get to
-%% keep tail recursion optimisation even though we use a `try'/`catch'.
-switch_internal(Arguments, [Clause | Clauses]) ->
-    case apply(Clause, Arguments) of
-        {ok, _} = Ok -> Ok;
-        continue -> switch(Arguments, Clauses)
-    end.
-
-%% Sets the given location on the given target.
-%% The `Location' can be either an {@link erl_anno:anno/0} or
-%% {@link merlin:ast/0, form} from which the information is copied. In this
-%% case all user annotaions are copied, not just the {@link erl_anno:anno/0}
-%% annotations.
-%%
-%% @see erl_anno:anno()
-%% @see erl_syntax:copy_attrs/2
-set_location(Location, Target) ->
-    case erl_anno:is_anno(Location) of
-        true ->
-            erl_syntax:set_pos(Target, Location);
-        false ->
-            ?assertIsForm(Location),
-            erl_syntax:copy_attrs(Location, Target)
-    end.
-
+%%%_* Private ----------------------------------------------------------------
 %% @private
 %% @doc Does most of the work of this parse_transform, except calling
 %% {@link merl_transform:parse_transform/2}.
 %%
 %% This is to allows easier testing.
+-spec transform(Forms, Options) -> FinalForms when
+    Forms :: [merlin:ast()],
+    Options :: [compile:option()],
+    FinalForms :: [merlin:ast()].
 transform([], _Options) ->
     [];
 transform(Forms, Options) ->
-    AnnotatedForms = merlin:annotate(Forms, [file, bindings]),
+    AnnotatedForms = merlin_module:annotate(Forms, [file, bindings]),
     {FinalForms, _FinalState} = merlin:transform(
         AnnotatedForms,
         fun quote/3,
         #{
             options => Options,
-            module => merlin_lib:module(Forms)
+            module => merlin_module:name(Forms)
         }
     ),
     FinalForms.
@@ -246,15 +245,25 @@ quote(enter, Form, #{module := Module}) ->
                 "Detected quote pattern in ~s:~s/~p",
                 [Module, merlin_lib:value(Name), Arity]
             ),
-            Variables = merlin_lib:new_variables(Form, Arity, "__Arg"),
-            CaseArgument0 =
+            %% Silence unused variable warning if the logging above is disabled
+            _ = Module,
+            {CaseArgument0, VariableOrVariables} = merlin_bindings:new(Form, #{
+                total => Arity,
+                format => "arg@~p"
+            }),
+            {CaseArgument3, Variables} =
                 case Arity of
-                    1 -> hd(Variables);
-                    _ -> erl_syntax:list(Variables)
+                    1 ->
+                        {VariableOrVariables, [VariableOrVariables]};
+                    _ ->
+                        CaseArgument1 = erl_syntax:list(VariableOrVariables),
+                        CaseArgument2 = erl_syntax:copy_attrs(
+                            CaseArgument0, CaseArgument1
+                        ),
+                        {CaseArgument2, VariableOrVariables}
                 end,
-            CaseArgument1 = merlin_lib:add_bindings(CaseArgument0, Variables),
-            CaseArgument2 = merlin_lib:set_annotation(
-                CaseArgument1,
+            CaseArgument4 = merlin_annotations:set(
+                CaseArgument3,
                 function_arguments,
                 Variables
             ),
@@ -264,7 +273,7 @@ quote(enter, Form, #{module := Module}) ->
             ),
             ?Q([
                 "'@Name'(_@Variables) ->",
-                "   case _@CaseArgument2 of",
+                "   case _@CaseArgument4 of",
                 "       _@_ ->",
                 "           _@_Clauses1",
                 "   end."
@@ -276,15 +285,14 @@ quote(enter, Form, #{module := Module}) ->
             "end"
         ]) when has_complex_merl_patterns(Clauses0) ->
             Arguments = erl_syntax:list(
-                merlin_lib:get_annotation(
+                merlin_annotations:get(
                     CaseArgument0,
                     function_arguments,
                     [CaseArgument0]
                 )
             ),
-            {ValueVar, CaseArgument1} = merlin_lib:add_new_variable(
-                CaseArgument0,
-                "__ValueVar"
+            {CaseArgument1, ValueVar} = merlin_bindings:new(
+                CaseArgument0, "value_var@~p"
             ),
             RaiseFunctionOrCaseClause = raise_function_or_case_clause(
                 CaseArgument1
@@ -307,13 +315,13 @@ quote(enter, Form, #{module := Module}) ->
 quote(_, _, _) ->
     continue.
 
-%% @doc Is the given `Form' the match all pattern, aka underscore?
-is_underscore(Form) ->
-    erl_syntax:type(Form) =:= underscore.
+%% @doc Is the given node the match all pattern, aka underscore?
+is_underscore(Node) ->
+    erl_syntax:type(Node) =:= underscore.
 
-%% @doc Is the given `Form' a variable/binding?
-is_variable(Form) ->
-    erl_syntax:type(Form) =:= variable.
+%% @doc Is the given node a variable/binding?
+is_variable(Node) ->
+    erl_syntax:type(Node) =:= variable.
 
 %% @doc Will the given `Clause' always match?
 %%
@@ -333,20 +341,20 @@ will_always_match(Clause) ->
 %% @doc Does the given `Pattern' refer to an unbound variable?
 %% The bindings are taken from the second argument.
 %%
-%% @see merlin_lib:annotate_bindings/1
+%% @see merlin_bindings:annotate/1
 is_unbound_variable(Pattern, Forms) when is_list(Forms) ->
     is_unbound_variable(Pattern, erl_syntax:form_list(Forms));
 is_unbound_variable(Pattern, Form0) ->
-    Form1 = merlin_lib:annotate_bindings(Form0),
     case erl_syntax:type(Pattern) of
         variable ->
+            Form1 = merlin_bindings:annotate(Form0),
             Name = erl_syntax:variable_name(Pattern),
-            merlin_lib:get_binding_type(Form1, Name) =:= free;
+            merlin_bindings:has(Form1, Name, free);
         _ ->
             false
     end.
 
-%% Is the given guard a valid guard expression?
+%% @doc Is the given guard a valid guard expression?
 %%
 %% It also accepts empty guards, since this is used to determine if the guard
 %% can be attached to a clause, or if it needs to be handled with a `try'
@@ -371,7 +379,7 @@ is_merl_quote(Pattern) ->
 %% {@link is_merl_pattern/1. merl pattern}?
 %% This checks for nested merl patterns as well as top-level.
 has_quote_pattern(Patterns) ->
-    case merlin:find_form(Patterns, fun is_merl_quote/1) of
+    case merlin_lib:deep_find_by(Patterns, fun is_merl_quote/1) of
         {ok, _} -> true;
         {error, notfound} -> false
     end.
@@ -425,7 +433,7 @@ is_merl_switchable([Clause | Clauses]) ->
             false
     end.
 
-%% @doc Converts functions clauses, that may have multile patterns, to case
+%% @doc Converts functions clauses, that may have multiple patterns, to case
 %% clauses that may only have one pattern.
 %%
 %% It also marks these clauses with the `function_clause' annotation for
@@ -437,7 +445,7 @@ function_clause_to_case_clause(Clause0) ->
         Patterns ->
             UnifiedPattern = erl_syntax:list(Patterns),
             Clause1 = update_clause(Clause0, [UnifiedPattern]),
-            merlin_lib:set_annotation(Clause1, function_clause, true)
+            merlin_annotations:set(Clause1, function_clause, true)
     end.
 
 %% @doc Returns a {@link erl_syntax:list/1. list node} with the result of
@@ -453,7 +461,7 @@ clause_to_fun(Clause0) ->
     Body1 = ok_tuple(Body0),
     Clause1 = update_clause(Clause0, copy, copy, Body1),
     Clause2 =
-        case merlin_lib:get_annotation(Clause1, function_clause, false) of
+        case merlin_annotations:get(Clause1, function_clause, false) of
             true ->
                 %% Pattern is the list of patterns from the original function head
                 update_clause(Clause1, erl_syntax:list_elements(CasePattern));
@@ -527,9 +535,9 @@ clause_to_fun(Clause0) ->
 %% The guard, if any, is attached to the innermost merl pattern/case, allowing
 %% it access to variables bound in all cases.
 %%
-%% In the resulting cases, if ant merl pattern won't match, `continue' is
-%% returned instead. It is up to the caller to wrap the body in a
-%% `{ok, _}' tuple.
+%% In the resulting cases, if any merl pattern won't match, `continue' is
+%% returned instead. It is up to the caller to wrap the body in a `{ok, _}'
+%% tuple.
 %%
 %% It tries to avoid useless cases, assigning variables directly, and avoiding
 %% `_' patterns entirely.
@@ -551,16 +559,14 @@ fold_merl_patterns([{MerlPattern, TemporaryVariable} | Replacements], Guard, Bod
         ?Q("continue")
     ).
 
-%% @doc Returns the given form, or forms, wrapped in a `{ok, Form}' tuple.
+%% @doc Returns the given node, or nodes, wrapped in a `{ok, Node}' tuple.
 %%
-%% If given a list of forms, they are additionally wrapped in a
-%% `begin Forms end'.
-ok_tuple([Form]) ->
-    ok_tuple(Form);
-ok_tuple(Forms) when is_list(Forms) ->
-    ?Q("{ok, begin _@Forms end}");
-ok_tuple(Form) ->
-    ?Q("{ok, _@Form}").
+%% If given a list of nodes, they are additionally wrapped in a
+%% `begin Nodes end'.
+ok_tuple([Node]) ->
+    ?Q("{ok, _@Node}");
+ok_tuple(Nodes) when is_list(Nodes) ->
+    ?Q("{ok, begin _@Nodes end}").
 
 %% @doc Returns the given `Pattern' matched against the given `Argument',
 %% followed by the given `Body'.
@@ -597,14 +603,6 @@ case_or_match(Argument, Pattern, Guard, MatchBody, NoMatchBody) ->
     ).
 
 %% @private
-case_maybe_with_no_match_clause(Argument, Pattern, Guard, MatchBody0, none) ->
-    MatchBody1 = maybe_wrap_in_list(MatchBody0),
-    ?Q([
-        "case _@Argument of",
-        "    _@Pattern when _@__Guard ->",
-        "        _@MatchBody1",
-        "end"
-    ]);
 case_maybe_with_no_match_clause(Argument, Pattern, Guard, MatchBody0, NoMatchBody0) ->
     MatchBody1 = maybe_wrap_in_list(MatchBody0),
     NoMatchBody1 = maybe_wrap_in_list(NoMatchBody0),
@@ -643,41 +641,41 @@ join(OperatorName, [First | Expressions]) ->
         Expressions
     ).
 
-%% Returns the given form with all merl patterns replaced with temporary
+%% Returns the given node with all merl patterns replaced with temporary
 %% variables, together with those variables.
 %%
 %% It takes the current set of bindings from the first argument, and updates
 %% it with the temporary variables created during transformation.
--dialyzer({nowarn_function, replace_merl_with_temporary_variables/2}).
--spec replace_merl_with_temporary_variables(Parent, FormsToReplace) ->
-    {Parent, FormsToReplace, Replacements}
+% -dialyzer({nowarn_function, replace_merl_with_temporary_variables/2}).
+-spec replace_merl_with_temporary_variables(Clause, Patterns) ->
+    {Clause, PatternsWithoutMerl, Replacements}
 when
-    Parent :: merlin:ast(),
-    FormsToReplace :: merlin:ast(),
+    Clause :: merlin:ast(),
+    Patterns :: [merlin:ast()],
+    PatternsWithoutMerl :: [merlin:ast()],
     Replacements :: [{MerlPattern, TemporaryVariable}],
     MerlPattern :: merlin:ast(),
     TemporaryVariable :: merlin:ast().
-replace_merl_with_temporary_variables(Parent0, FormsToReplace) ->
+replace_merl_with_temporary_variables(Clause0, Patterns) when is_list(Patterns) ->
     State = #{
-        bindings => merlin_lib:get_annotations(Parent0),
+        clause => Clause0,
         replacements => []
     },
-    {Result, #{
-        bindings := NewBindings,
+    {PatternsWithoutMerl, #{
+        clause := Clause1,
         replacements := Replacements
     }} = merlin:transform(
-        FormsToReplace,
+        Patterns,
         fun replacement_transformer/3,
         State
     ),
-    Parent1 = merlin_lib:add_bindings(Parent0, NewBindings),
-    {Parent1, Result, Replacements}.
+    {Clause1, PatternsWithoutMerl, Replacements}.
 
 %% @private
 replacement_transformer(
     enter,
     Form,
-    #{bindings := Bindings0, replacements := Replacements} = State0
+    #{clause := Clause0, replacements := Replacements} = State0
 ) ->
     case Form of
         ?Q("_@MerlPattern = _@Var") when
@@ -689,31 +687,23 @@ replacement_transformer(
             },
             {return, Var, State1};
         ?Q("_@MerlPattern") when is_merl_quote(MerlPattern) ->
-            {TemporaryVariableName, Bindings1} = merlin_lib:add_new_variable(
-                Bindings0
-            ),
-            TemporaryVariable0 = erl_syntax:variable(TemporaryVariableName),
+            {Clause1, TemporaryVariable0} = merlin_bindings:new(Clause0),
             TemporaryVariable1 = erl_syntax:copy_attrs(
                 MerlPattern,
                 TemporaryVariable0
             ),
-            TemporaryVariable2 = merlin_lib:set_annotation(
-                TemporaryVariable1,
-                generated,
-                true
-            ),
             State1 = State0#{
-                bindings := Bindings1,
-                replacements := [{MerlPattern, TemporaryVariable2} | Replacements]
+                clause := Clause1,
+                replacements := [{MerlPattern, TemporaryVariable1} | Replacements]
             },
-            {return, TemporaryVariable2, State1};
+            {return, TemporaryVariable1, State1};
         _ ->
             continue
     end;
 replacement_transformer(_, _, _) ->
     continue.
 
-%% @doc Returns a form, or forms, that {@link erlang:raise/3. raises} either
+%% @doc Returns a node, or nodes, that {@link erlang:raise/3. raises} either
 %% `function_clause' or `case_clause' as appropriately.
 %%
 %% It uses the `function_arguments' annotation to determine this. It also
@@ -722,7 +712,7 @@ replacement_transformer(_, _, _) ->
 %% frame, and for case clause it errors with the case argument.
 raise_function_or_case_clause(CaseArgument0) ->
     case
-        merlin_lib:get_annotation(
+        merlin_annotations:get(
             CaseArgument0,
             function_arguments,
             undefined
@@ -734,29 +724,29 @@ raise_function_or_case_clause(CaseArgument0) ->
             ]),
             RaiseCaseClauseBody;
         FunctionArguments ->
-            [
+            {_CaseArgument1, [
                 CurrentFrame0,
                 CurrentFrame1,
                 Frames
-            ] = merlin_lib:new_variables(CaseArgument0, 3),
+            ]} = merlin_bindings:new(CaseArgument0, 3),
             RaiseFunctionClauseBody = ?Q([
-                "{current_stacktrace, [_@CurrentFrame0|_@Frames]} =",
-                "    erlang:process_info(self(), current_stacktrace),",
+                "{current_stacktrace, [_@CurrentFrame0 | _@Frames]} =",
+                "    erlang:process_info(erlang:self(), current_stacktrace),",
                 "_@CurrentFrame1 = erlang:setelement(",
                 "    4, _@CurrentFrame0, [_@FunctionArguments]",
                 "),",
                 "erlang:raise(",
-                "    error, function_clause, [_@CurrentFrame1|_@Frames]",
+                "    error, function_clause, [_@CurrentFrame1 | _@Frames]",
                 ")"
             ]),
             RaiseFunctionClauseBody
     end.
 
-%% @doc Same as {@link update_clause/4}, copying both the guard and body.
+%% @equiv update_clause(Clause, Patterns, copy, copy)
 update_clause(Clause, Patterns) ->
     update_clause(Clause, Patterns, copy).
 
-%% @doc Same as {@link update_clause/4}, copying the body.
+%% @equiv update_clause(Clause, Patterns, Guard, copy)
 update_clause(Clause, underscore, Body) ->
     update_clause(Clause, underscore, none, Body);
 update_clause(Clause, Patterns, Guard) ->
@@ -764,11 +754,22 @@ update_clause(Clause, Patterns, Guard) ->
 
 %% @doc Updates the given `Clause' with the given `Patterns', `Guard' and
 %% `Body'.
-%% Instead of replacing, you can given the atom `copy' to copy one from the
-%% original. This is to allow partial updates.
-%% Finally, you can given `underscore' as the pattern as a shorthand for a
-%% match all pattern. This also clears any guard. If you want a match all
-%% clause with a guard, supply the match all pattern yourself.
+%%
+%% The `Patterns' may be `underscore', to indicate that the clause should match
+%% any pattern(s). This also clears any guard. If you want a match all clause
+%% with a guard, you need to use {@link erl_syntax:underscore/0} for the
+%% patterns.
+%%
+%% The `Guard' may be `none', to indicate that there is no guard.
+%% The `Body' may be a node or list of nodes.
+%%
+%% You may also use the atom `copy' for any of the arguments, to indicate that
+%% the corresponding part of the `Clause' should be copied over.
+-spec update_clause(Clause, Patterns, Guard, Body) -> merlin:erl_syntax_ast() when
+    Clause :: merlin:ast(),
+    Patterns :: copy | underscore | [merlin:ast()],
+    Guard :: copy | none | merlin:ast(),
+    Body :: copy | merlin:ast() | [merlin:ast()].
 update_clause(Clause, underscore, _, Body) ->
     Patterns0 = erl_syntax:clause_patterns(Clause),
     Patterns1 = lists:duplicate(length(Patterns0), underscore(Clause)),
@@ -808,12 +809,12 @@ maybe_wrap_in_list(Form) ->
 %% @doc Like {@link merlin:return/2}, while also applying the
 %% {@link merl_transform:parse_transform/2. merl parse_transform}.
 return(Result, Options) ->
-    merlin:then(merlin:return(Result), fun(Forms) ->
+    merlin_lib:then(merlin:return(Result), fun(Forms) ->
         merl_transform:parse_transform(Forms, Options)
     end).
 
+%%%_* Tests ==================================================================
 -ifdef(TEST).
--include_lib("eunit/include/eunit.hrl").
 
 -define(EXAMPLE_QUOTE_MARKER,
     ?STRINGIFY({'MERLIN QUOTE MARKER', "example.erl", 123, "erlang:max(1, 2)"})
@@ -856,14 +857,6 @@ has_quote_pattern_test_() ->
         ]
     ].
 
-%% Helper macro for defining a module, to be used with the ?QUOTE macros
--define(PREPEND_MODULE_FORMS(QuotedForm), [
-    ?Q("-file(\"example.erl\", 1)."),
-    ?Q("-module(example)."),
-    ?Q("-record(state, {form})."),
-    QuotedForm
-]).
-
 %% Test helper, to make the transform_simple_test_/0 nice to read. Using a
 %% macro makes ?Q/1 print better line numbers.
 -define(_transformTest(Title, Original, Expected),
@@ -875,18 +868,24 @@ has_quote_pattern_test_() ->
             %% Strip away the module forms
             ?assertMatch([_, _, _, _], Transformed),
             [_, _, _, TransformedFunc] = Transformed,
-            ?assertMerlMatch(Expected, TransformedFunc)
+            ?assertMerlEqual(Expected, TransformedFunc)
         end
     }
 ).
 
 transform_simple_test_() ->
+    Arg@0 = erl_syntax:variable(arg@0),
+    Arg@1 = erl_syntax:variable(arg@1),
+    Arg@2 = erl_syntax:variable(arg@2),
+    ValueVar@0 = erl_syntax:variable(value_var@0),
+    Var0 = erl_syntax:variable('var-0'),
+    Var1 = erl_syntax:variable('var-1'),
+    Var2 = erl_syntax:variable('var-2'),
+    Var3 = erl_syntax:variable('var-3'),
     {
         foreach,
-        fun() ->
-            %% Reset automatic variable counter used during tests
-            erase()
-        end,
+        %% Reset automatic variable counter used during tests
+        fun merlin_bindings:reset_uniqueness_counter/0,
         [
             ?_transformTest(
                 "Single merl pattern w/o guard",
@@ -894,12 +893,12 @@ transform_simple_test_() ->
                     func({'MERLIN QUOTE MARKER', "example.erl", 12, "_@Var"}) ->
                         {simple_merl_pattern, Var}
                 ),
-                ?QUOTE(
-                    func(__Arg1) ->
-                        case __Arg1 of
-                            merl:quote(12, "_@Var") ->
-                                {simple_merl_pattern, Var}
-                        end
+                ?Q([
+                    "func(_@Arg@0) ->",
+                    "    case _@Arg@0 of",
+                    "        merl:quote(12, \"_@Var\") ->",
+                    "            {simple_merl_pattern, Var}",
+                    "    end."]
                 )
             ),
             ?_transformTest(
@@ -916,17 +915,21 @@ transform_simple_test_() ->
                     func({'MERLIN QUOTE MARKER', "example.erl", 18, "_@Form"}) ->
                         {simple_merl_pattern, Form}
                 ),
-                ?QUOTE(
-                    func(__Arg1) ->
-                        case __Arg1 of
-                            merl:quote(10, "_@Var") when erl_syntax:type(Var) =:= variable ->
-                                {merl_guard, Var};
-                            merl:quote(14, "_@Pattern = _@Expr") when is_tuple(Pattern) ->
-                                {erlang_guard, Expr};
-                            merl:quote(18, "_@Form") ->
-                                {simple_merl_pattern, Form}
-                        end
-                )
+                ?Q([
+                    "func(_@Arg@0) ->",
+                    "    case _@Arg@0 of",
+                    "        merl:quote(10, \"_@Var\") when",
+                    "            erl_syntax:type(Var) =:= variable",
+                    "        ->",
+                    "            {merl_guard, Var};",
+                    "        merl:quote(14, \"_@Pattern = _@Expr\") when",
+                    "            is_tuple(Pattern)",
+                    "        ->",
+                    "            {erlang_guard, Expr};",
+                    "        merl:quote(18, \"_@Form\") ->",
+                    "            {simple_merl_pattern, Form}",
+                    "    end."
+                ])
             ),
             ?_transformTest(
                 "Multiple arguments",
@@ -940,55 +943,55 @@ transform_simple_test_() ->
                     func(enter, {'MERLIN QUOTE MARKER', "example.erl", 18, "_@Form"}, #{count := Count} = State) ->
                         {simple_merl_pattern, Form, State#{count := Count + 1}}
                 ),
-                ?QUOTE(
-                    func(__Arg3, __Arg2, __Arg1) ->
-                        case merlin_quote_transform:switch(
-                            [__Arg3, __Arg2, __Arg1],
-                            [
-                                fun (enter, __Var4__, State) ->
-                                        case __Var4__ of
-                                            merl:quote(10, "_@Var") when
-                                                erl_syntax:type(Var) =:= variable
-                                            ->
-                                                {ok, {merl_guard, Var}};
-                                            _ ->
-                                                continue
-                                        end;
-                                    (_, _, _) ->
-                                        continue
-                                end,
-                                %% Note that `Form' is not replaced with a temporary variable
-                                fun (enter, Form, State) ->
-                                        case Form of
-                                            merl:quote(14, "_@Pattern = _@Expr") ->
-                                                {ok, {assigned_whole_merl_pattern, Form}};
-                                            _ ->
-                                                continue
-                                        end;
-                                    (_, _, _) ->
-                                        continue
-                                end,
-                                fun (enter, __Var5__, #{count := Count} = State) ->
-                                        case __Var5__ of
-                                            merl:quote(18, "_@Form") ->
-                                                {ok, {simple_merl_pattern, Form, State#{count := Count + 1}}};
-                                            _ ->
-                                                continue
-                                        end;
-                                    (_, _, _) ->
-                                        continue
-                                end
-                            ]
-                        ) of
-                            {ok, __ValueVar1} ->
-                                __ValueVar1;
-                            _ ->
-                                {current_stacktrace, [__Var3__ | __Var1__]} =
-                                    erlang:process_info(self(), current_stacktrace),
-                                __Var2__ = erlang:setelement(4, __Var3__, [__Arg3, __Arg2, __Arg1]),
-                                erlang:raise(error, function_clause, [__Var2__ | __Var1__])
-                        end
-                )
+                ?Q([
+                    "func(_@Arg@0, _@Arg@1, _@Arg@2) ->",
+                    "    case merlin_quote_transform:switch(",
+                    "        [_@Arg@0, _@Arg@1, _@Arg@2],",
+                    "        [",
+                    "            fun (enter, _@Var2, State) ->",
+                    "                    case _@Var2 of",
+                    "                        merl:quote(10, \"_@Var\") when",
+                    "                            erl_syntax:type(Var) =:= variable",
+                    "                        ->",
+                    "                            {ok, {merl_guard, Var}};",
+                    "                        _ ->",
+                    "                            continue",
+                    "                    end;",
+                    "                (_, _, _) ->",
+                    "                    continue",
+                    "            end,",
+                    %%           Note that `Form' is not replaced with a temporary variable
+                    "            fun (enter, Form, State) ->",
+                    "                    case Form of",
+                    "                        merl:quote(14, \"_@Pattern = _@Expr\") ->",
+                    "                            {ok, {assigned_whole_merl_pattern, Form}};",
+                    "                        _ ->",
+                    "                            continue",
+                    "                    end;",
+                    "                (_, _, _) ->",
+                    "                    continue",
+                    "            end,",
+                    "            fun (enter, _@Var2, #{count := Count} = State) ->",
+                    "                    case _@Var2 of",
+                    "                        merl:quote(18, \"_@Form\") ->",
+                    "                            {ok, {simple_merl_pattern, Form, State#{count := Count + 1}}};",
+                    "                        _ ->",
+                    "                            continue",
+                    "                    end;",
+                    "                (_, _, _) ->",
+                    "                    continue",
+                    "            end",
+                    "        ]",
+                    "    ) of",
+                    "        {ok, _@ValueVar@0} ->",
+                    "            _@ValueVar@0;",
+                    "        _ ->",
+                    "            {current_stacktrace, [_@Var0 | _@Var2]} =",
+                    "                erlang:process_info(erlang:self(), current_stacktrace),",
+                    "            _@Var1 = erlang:setelement(4, _@Var0, [_@Arg@0, _@Arg@1, _@Arg@2]),",
+                    "            erlang:raise(error, function_clause, [_@Var1 | _@Var2])",
+                    "    end."
+                ])
             ),
             ?_transformTest(
                 "Multiple merl patterns per clause",
@@ -1001,41 +1004,41 @@ transform_simple_test_() ->
                         Right = erl_syntax:variable_name(Second),
                         Left =:= Right
                 ),
-                ?QUOTE(
-                    func(__Arg2, __Arg1) ->
-                        case merlin_quote_transform:switch(
-                                [__Arg2, __Arg1],
-                                [
-                                    fun (__Var4__, __Var5__) ->
-                                            case __Var5__ of
-                                                merl:quote(11, "_@Second") ->
-                                                    case __Var4__ of
-                                                        merl:quote(10, "_@First") ->
-                                                            {ok, begin
-                                                                Left = erl_syntax:variable_name(First),
-                                                                Right = erl_syntax:variable_name(Second),
-                                                                Left =:= Right
-                                                            end};
-                                                        _ ->
-                                                            continue
-                                                    end;
-                                                _ ->
-                                                    continue
-                                            end
-                                        %% Since the first fun head always matches there's no need for
-                                        %% (_, _) -> continue
-                                    end
-                                ]
-                        ) of
-                            {ok, __ValueVar1} ->
-                                __ValueVar1;
-                            _ ->
-                                {current_stacktrace, [__Var3__ | __Var1__]} =
-                                    erlang:process_info(self(), current_stacktrace),
-                                __Var2__ = erlang:setelement(4, __Var3__, [__Arg2, __Arg1]),
-                                erlang:raise(error, function_clause, [__Var2__ | __Var1__])
-                        end
-                )
+                ?Q([
+                    "func(_@Arg@0, _@Arg@1) ->",
+                    "    case merlin_quote_transform:switch(",
+                    "        [_@Arg@0, _@Arg@1],",
+                    "        [",
+                    "            fun (_@Var2, _@Var3) ->",
+                    "                    case _@Var3 of",
+                    "                        merl:quote(11, \"_@Second\") ->",
+                    "                            case _@Var2 of",
+                    "                                merl:quote(10, \"_@First\") ->",
+                    "                                    {ok, begin",
+                    "                                        Left = erl_syntax:variable_name(First),",
+                    "                                        Right = erl_syntax:variable_name(Second),",
+                    "                                        Left =:= Right",
+                    "                                    end};",
+                    "                                _ ->",
+                    "                                    continue",
+                    "                            end;",
+                    "                        _ ->",
+                    "                            continue",
+                    "                    end",
+                    %%                 Since the first fun head always matches there's no need for
+                    %%                 (_, _) -> continue
+                    "            end",
+                    "        ]",
+                    "    ) of",
+                    "        {ok, _@ValueVar@0} ->",
+                    "            _@ValueVar@0;",
+                    "        _ ->",
+                    "            {current_stacktrace, [_@Var0 | _@Var2]} =",
+                    "                erlang:process_info(erlang:self(), current_stacktrace),",
+                    "            _@Var1 = erlang:setelement(4, _@Var0, [_@Arg@0, _@Arg@1]),",
+                    "            erlang:raise(error, function_clause, [_@Var1 | _@Var2])",
+                    "    end."
+                ])
             ),
             ?_transformTest(
                 "Nested merl pattern",
@@ -1046,33 +1049,32 @@ transform_simple_test_() ->
                     }) ->
                         erl_eval:expr(Expr, Bindings)
                 ),
-                ?QUOTE(
-                    func(__Arg1) ->
-                        case merlin_quote_transform:switch(
-                            [__Arg1],
-                            [
-                                fun (#state{form=__Var4__, bindings=Bindings}) ->
-                                        case __Var4__ of
-                                            merl:quote(10, "_@Pattern = _@Expr") ->
-                                                {ok, erl_eval:expr(Expr, Bindings)};
-                                            _ ->
-                                                continue
-                                        end;
-                                    (_) ->
-                                        continue
-                                end
-                            ]
-
-                        ) of
-                            {ok, __ValueVar1} ->
-                                __ValueVar1;
-                            _ ->
-                                {current_stacktrace, [__Var3__ | __Var1__]} =
-                                    erlang:process_info(self(), current_stacktrace),
-                                __Var2__ = erlang:setelement(4, __Var3__, [__Arg1]),
-                                erlang:raise(error, function_clause, [__Var2__ | __Var1__])
-                        end
-                )
+                ?Q([
+                    "func(_@Arg@0) ->",
+                    "    case merlin_quote_transform:switch(",
+                    "        [_@Arg@0],",
+                    "        [",
+                    "            fun (#state{form=_@Var2, bindings=Bindings}) ->",
+                    "                    case _@Var2 of",
+                    "                        merl:quote(10, \"_@Pattern = _@Expr\") ->",
+                    "                            {ok, erl_eval:expr(Expr, Bindings)};",
+                    "                        _ ->",
+                    "                            continue",
+                    "                    end;",
+                    "                (_) ->",
+                    "                    continue",
+                    "            end",
+                    "        ]",
+                    "    ) of",
+                    "        {ok, _@ValueVar@0} ->",
+                    "            _@ValueVar@0;",
+                    "        _ ->",
+                    "            {current_stacktrace, [_@Var0 | _@Var2]} =",
+                    "                erlang:process_info(erlang:self(), current_stacktrace),",
+                    "            _@Var1 = erlang:setelement(4, _@Var0, [_@Arg@0]),",
+                    "            erlang:raise(error, function_clause, [_@Var1 | _@Var2])",
+                    "    end."
+                ])
             ),
             ?_transformTest(
                 "No merl pattern with extended guard",
@@ -1082,49 +1084,49 @@ transform_simple_test_() ->
                     func(enter, Clause, _) when erl_syntax:type(Clause) =:= clause ->
                         clause
                 ),
-                ?QUOTE(
-                    func(__Arg3, __Arg2, __Arg1) ->
-                        case merlin_quote_transform:switch(
-                            [__Arg3, __Arg2, __Arg1],
-                            [
-                                fun (enter, __Var4__, _) ->
-                                        case __Var4__ of
-                                            merl:quote(10, "_@Pattern = _@Expr") ->
-                                                {ok, match};
-                                            _ ->
-                                                continue
-                                        end;
-                                    (_, _, _) ->
-                                        continue
-                                end,
-                                fun (enter, Clause, _) ->
-                                        case
-                                            try
-                                                erl_syntax:type(Clause) =:= clause
-                                            catch
-                                                _:_ ->
-                                                    false
-                                            end
-                                        of
-                                            true ->
-                                                {ok, clause};
-                                            _ ->
-                                                continue
-                                        end;
-                                    (_, _, _) ->
-                                        continue
-                                end
-                            ]
-                        ) of
-                            {ok, __ValueVar1} ->
-                                __ValueVar1;
-                            _ ->
-                                {current_stacktrace, [__Var3__ | __Var1__]} =
-                                    erlang:process_info(self(), current_stacktrace),
-                                __Var2__ = erlang:setelement(4, __Var3__, [__Arg3, __Arg2, __Arg1]),
-                                erlang:raise(error, function_clause, [__Var2__ | __Var1__])
-                        end
-                )
+                ?Q([
+                    "func(_@Arg@0, _@Arg@1, _@Arg@2) ->",
+                    "    case merlin_quote_transform:switch(",
+                    "        [_@Arg@0, _@Arg@1, _@Arg@2],",
+                    "        [",
+                    "            fun (enter, _@Var2, _) ->",
+                    "                    case _@Var2 of",
+                    "                        merl:quote(10, \"_@Pattern = _@Expr\") ->",
+                    "                            {ok, match};",
+                    "                        _ ->",
+                    "                            continue",
+                    "                    end;",
+                    "                (_, _, _) ->",
+                    "                    continue",
+                    "            end,",
+                    "            fun (enter, Clause, _) ->",
+                    "                case",
+                    "                    try",
+                    "                        erl_syntax:type(Clause) =:= clause",
+                    "                    catch",
+                    "                        _:_ ->",
+                    "                            false",
+                    "                    end",
+                    "                of",
+                    "                    true ->",
+                    "                        {ok, clause};",
+                    "                    _ ->",
+                    "                        continue",
+                    "                end;",
+                    "            (_, _, _) ->",
+                    "                continue",
+                    "            end",
+                    "        ]",
+                    "    ) of",
+                    "        {ok, _@ValueVar@0} ->",
+                    "            _@ValueVar@0;",
+                    "        _ ->",
+                    "            {current_stacktrace, [_@Var0 | _@Var2]} =",
+                    "                erlang:process_info(erlang:self(), current_stacktrace),",
+                    "            _@Var1 = erlang:setelement(4, _@Var0, [_@Arg@0, _@Arg@1, _@Arg@2]),",
+                    "            erlang:raise(error, function_clause, [_@Var1 | _@Var2])",
+                    "    end."
+                ])
             )
         ]
     }.

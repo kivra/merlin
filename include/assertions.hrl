@@ -1,13 +1,23 @@
+-ifndef(MERLIN_ASSERTIONS_HRL).
+-define(MERLIN_ASSERTIONS_HRL, true).
+
 -include_lib("stdlib/include/assert.hrl").
 
 -ifdef(NOASSERT).
+-define(if_asserting(Block), ok).
 -define(assertMerlMatch(Guard, Expr), ok).
 -define(assertMerlEqual(Expected, Expr), ok).
--define(assertIsForm(Expr), ok).
+-define(assertIsNode(Expr), ok).
 -define(assertNodeType(Expr, Type), ok).
+-define(assertRegexpMatch(Regexp, Subject), ok).
 -else.
+%% Helper for compiling away code when assertions are disabled
+-define(if_asserting(Block), Block).
+
 %% Merl compatible version of ?assertEqual/2
-%% For use with merls `?Q/1' macro, `?assertMerlMatch(?Q(...) when ..., Expr)'
+%%
+%% For use with {@link merl. merls} `?Q/1' macro,
+%% `?assertMerlMatch(?Q(...) when ..., Expr)'
 %%
 %% On failure it pretty prints both the guard and matched value.
 %% It also reverts both the {@link merl:tree/1. expected} and
@@ -18,17 +28,15 @@
             Guard ->
                 ok;
             _ ->
-                X__GuardSource = merlin_internal:format_merl_guard(?LINE, ??Guard),
-                io:format("Expected~n~s~nto match~n~s~n", [
-                    merlin_merl:format(X__Value),
-                    X__GuardSource
-                ]),
+                merlin_internal:print_merl_match_failure(??Guard, X__Value, #{
+                    filename => ?FILE
+                }),
                 erlang:error(
                     {assertMatch, [
                         {module, ?MODULE},
                         {line, ?LINE},
                         {expression, ??Expr},
-                        {pattern, X__GuardSource},
+                        {pattern, ??Guard},
                         {value, merlin:revert(X__Value)}
                     ]}
                 )
@@ -41,21 +49,24 @@ end).
 -define(_assertMerlMatch(Guard, Expr), ?_test(?assertMerlMatch(Guard, Expr))).
 
 %% Merl compatible version of ?assertEqual/2
-%% For use with an existing/dynamic `Form', `?assertMerlEqual(Form, Expr)'
 %%
-%% On failure it pretty prints both the expected and actual syntax trees.
+%% For use with an existing/dynamic `Node', `?assertMerlEqual(Node, Expr)'
+%%
+%% On failure it pretty prints the diff between the expected and actual syntax
+%% trees.
+%%
 %% It also reverts both the {@link merl:tree/1. expected} and
-%% {@link merlin_revert/1. actual} syntax trees to make it easier to compare.
+%% {@link merlin_revert/1. actual} syntax trees to make them easier to
+%% inspect and compare.
 -define(assertMerlEqual(Expected, Expr),
     ((fun(X__Expected, X__Value) ->
         case merl:match(X__Expected, X__Value) of
             {ok, X__Variables} when is_list(X__Variables) ->
                 ok;
             error ->
-                io:format("Expected~n~s~n~nto equal~n~s~n", [
-                    merlin_merl:format(X__Value),
-                    merlin_merl:format(X__Expected)
-                ]),
+                merlin_internal:print_merl_equal_failure(X__Expected, X__Value, #{
+                    filename => ?FILE
+                }),
                 erlang:error(
                     {assertEqual, [
                         {module, ?MODULE},
@@ -72,10 +83,10 @@ end).
 ).
 -define(_assertMerlEqual(Expected, Expr), ?_test(?assertMerlEqual(Expected, Expr))).
 
-%% Asserts that the given `Expr' is a valid {@link erl_syntax} form.
+%% Asserts that the given `Expr' is a valid {@link erl_syntax} node.
 %%
-%% Returns the type of the form.
--define(assertIsForm(Expr), begin
+%% Returns the type of the node.
+-define(assertIsNode(Expr), begin
     (fun(X__Node) ->
         try erl_syntax:type(X__Node) of
             __Type__ -> __Type__
@@ -99,7 +110,7 @@ end).
     )
 end).
 
-%% Asserts that the given `Expr' is a valid form with the given `Type'.
+%% Asserts that the given `Expr' is a valid node with the given `Type'.
 -define(assertNodeType(Expr, Type), begin
     (fun
         (X__TypeOfExpr, X__ExpectedType) when X__TypeOfExpr =:= X__ExpectedType ->
@@ -115,7 +126,33 @@ end).
                 ]}
             )
     end)(
-        ?assertIsForm(Expr), Type
+        ?assertIsNode(Expr), Type
     )
 end).
+
+-define(assertRegexpMatch(Regexp, Subject), begin
+    (fun(X__Subject, X__Regexp) ->
+        case re:run(X__Subject, X__Regexp, [{capture, none}]) of
+            match ->
+                ok;
+            nomatch ->
+                error(assertMatch, [
+                    {module, ?MODULE},
+                    {line, ?LINE},
+                    {expression,
+                        unicode:characters_to_list(
+                            io_lib:format("re:run(~s, ~tp, [{capture, none}])", [
+                                ??Subject, X__Regexp
+                            ])
+                        )},
+                    {pattern, "{match, _}"},
+                    {value, X__Subject}
+                ])
+        end
+    end)(
+        Subject, Regexp
+    )
+end).
+
+-endif.
 -endif.

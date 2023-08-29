@@ -2,76 +2,49 @@
 %%% @private
 %%% @end
 
+%%%_* Module declaration =====================================================
 -module(merlin_internal).
 
+%%%_* Exports ================================================================
 -export([
-    'DEFINE PROCEDURAL MACRO'/7
+    diff/2,
+    format/1,
+    format/2,
+    format_forms/1,
+    format_stack/1,
+    format_using_erl_error/2,
+    format_source_lines/2,
+    fun_to_mfa/1,
+    log_macro/4,
+    print_merl_match_failure/3,
+    print_merl_equal_failure/3,
+    print_stacktrace/1,
+    write_log_file/0
+]).
+
+-export([
+    maybe_get_file_attribute/1
 ]).
 
 -export([
     export_all/1,
-    eunit/1,
-    format_forms/1,
-    format_merl_guard/2,
-    format_stack/1,
-    format_using_erl_error/2,
-    fun_to_mfa/1,
-    log_macro/4,
-    pretty/1,
-    print_stacktrace/1,
-    quote/3,
-    split_by/2,
-    write_log_file/0
+    parse/1,
+    split_by/2
 ]).
 
 -ifdef(MERLIN_INTERNAL_EXPORT_ALL).
 -compile([export_all, nowarn_export_all]).
 -endif.
 
-%% @hidden
--spec 'DEFINE PROCEDURAL MACRO'(
-    file:filename(), erl_anno:line(), module(), atom(), arity(), string(), fun(
-        () -> any()
-    )
-) -> no_return().
-'DEFINE PROCEDURAL MACRO'(
-    File,
-    Line,
-    Module,
-    'MERLIN INTERNAL DEFINE PROCEDURAL MACRO',
-    0,
-    Macro,
-    _BodyFun
-) ->
-    Function = '',
-    Arity = 0,
-    erlang:raise(
-        error,
-        {missing_parse_transform,
-            lists:concat([
-                "To use merlin macros you must enable the merlin parse transform. ",
-                "In macro expression ?",
-                Macro
-            ])},
-        [{Module, Function, Arity, [{file, File}, {line, Line}]}]
-    );
-'DEFINE PROCEDURAL MACRO'(File, Line, Module, Function, Arity, Macro, _BodyFun) ->
-    erlang:raise(
-        error,
-        {missing_parse_transform,
-            lists:concat([
-                "To use merlin macros you must enable the merlin parse transform. ",
-                "In macro expression ?",
-                Macro
-            ])},
-        [{Module, Function, Arity, [{file, File}, {line, Line}]}]
-    ).
+%%%_* Includes ===============================================================
+-include("log.hrl").
 
-%% @private
+%% @hidden
 %% @doc This is a helper for the ?level(A, B, C) macros.
 %% Unfortunately it can't be inlined because dialyzer complains about
-%% "Guard test ... can never succeed". Which is true, but not relevant in the
-%% context of a macro designed to be called in multiple different ways.
+%% "Guard test ... can never succeed". Which is technically true, but not
+%% relevant in the context of a macro designed to be called in multiple
+%% different ways.
 -spec log_macro(logger:level(), term(), term(), logger:metadata()) -> ok.
 log_macro(Level, Format, Metadata, MacroMetadata) when
     (not is_function(Format)) andalso is_map(Metadata)
@@ -80,6 +53,7 @@ log_macro(Level, Format, Metadata, MacroMetadata) when
 log_macro(Level, A, B, Metadata) ->
     logger:log(Level, A, B, Metadata).
 
+%% @hidden
 write_log_file() ->
     %% Only flush if our logger is active
     case lists:member(debug_log, logger:get_handler_ids()) of
@@ -87,11 +61,83 @@ write_log_file() ->
         false -> ok
     end.
 
+%% @equiv format(SourceOrNodeOrNodes, #{})
+format(SourceOrNodeOrNodes) ->
+    format(SourceOrNodeOrNodes, #{}).
+
+%% @doc Formats the given `Source', {@link merlin:ast(). `Node'}, or `Nodes'
+%% using {@link erlfmt}.
+-spec format(string() | merlin:ast() | [merlin:ast()], Options) -> string() when
+    Options :: #{
+        %% Used by {@link erlfmt} to provide better error messages
+        filename => file:filename(),
+        %% Defaults to the current terminal width
+        linewidth => pos_integer()
+    }.
+format([], _Options) ->
+    "";
+format(Source, Options0) when is_integer(hd(Source)) ->
+    Options1 = default_formatting_options(Options0),
+    format_string(Source, Options1);
+format(Nodes, Options0) when is_list(Nodes) ->
+    Options1 = default_formatting_options(Options0),
+    lists:join($\n, [format_node(Node, Options1) || Node <- merlin_lib:flatten(Nodes)]);
+format(Node, Options0) ->
+    Options1 = default_formatting_options(Options0),
+    format_node(Node, Options1).
+
+%% @private
+default_formatting_options(Options) ->
+    Linewidth1 =
+        case Options of
+            #{linewidth := Linewidth0} ->
+                Linewidth0;
+            _ ->
+                case io:columns() of
+                    {ok, Value} -> Value;
+                    {error, enotsup} -> 120
+                end
+        end,
+    maps:to_list(
+        maps:merge(
+            #{
+                %% erlfmt
+                linewidth => Linewidth1,
+                %% erl_prettypr
+                paper => Linewidth1,
+                ribbon => Linewidth1 - 15,
+                encoding => utf8,
+                %% erl_pp
+                print_width => Linewidth1
+            },
+            Options
+        )
+    ).
+
+%% @private
+format_string(Source, Options) ->
+    {ok, Formatted, _Warnings} = erlfmt:format_string(
+        unicode:characters_to_list(string:replace(Source, <<"\n">>, <<" ">>, all)),
+        Options
+    ),
+    Formatted.
+
+%% @private
+format_node(Node0, Options0) ->
+    Node1 = merlin:revert(Node0),
+    Source = erl_prettypr:format(Node1, Options0),
+    Options1 =
+        case merlin_annotations:get(Node0, file, none) of
+            none -> Options0;
+            File -> lists:keystore(filename, 1, Options0, {filename, File})
+        end,
+    format_string(Source, Options1).
+
 %% @doc Returns a {Format, Arguments} pair with the given `Prefix' and `Forms'.
+%%
 %% This first tries to render the given 'Forms' as Erlang syntax using
-%% {@link erl_pp}, then as normal Erlang forms, {@link merlin:revert/1.
-%% reverting} as needed, and finally just using `"~tp"' with {@link
-%% io_lib:format/2}.
+%% {@link format/1}, {@link merlin:revert/1. reverting} as needed, and finally
+%% just using `io_lib:format("~tp", [Forms])'.
 -spec format_forms({string(), merlin:ast() | [merlin:ast()] | term()}) ->
     {string(), [iolist()]}.
 format_forms({Prefix, Forms}) when is_list(Prefix) ->
@@ -99,10 +145,8 @@ format_forms({Prefix, Forms}) when is_list(Prefix) ->
         Prefix,
         lists:join($\n, [
             try
-                pretty(Form)
+                format(Form)
             catch
-                throw:invalid_form ->
-                    io_lib:format("~tp", [merlin:revert(Form)]);
                 _:_ ->
                     io_lib:format("~tp", [Form])
             end
@@ -112,30 +156,82 @@ format_forms({Prefix, Forms}) when is_list(Prefix) ->
 format_forms(Forms) ->
     format_forms({"", Forms}).
 
-%% @doc Returns the given merl guard, at the given line, formatted using
-%% {@link merlin_merl:format/1}
-format_merl_guard(Line, GuardSource) ->
-    ExpandedMerlMacros = re:replace(
+%% @doc Used by `?assertMerlMatch' to print a useful error message on failure.
+print_merl_match_failure(GuardSource, Actual, Options) ->
+    FormattedActual = format_source_lines(Actual, Options),
+    {match, [Macro, MacroArguments]} = re:run(
         GuardSource,
-        %% Matches ?Q(...) calls
-        "\\? *Q *\\( *(.+?) *\\)",
-        %% and expands them like merl does
-        "merl:quote(\\1)",
-        [global, {return, list}]
+        %% Matches ?Q(...) and ?QUOTE(...) calls
+        "\\? *(Q|QUOTE) *\\( *(.+) *\\)$",
+        [{capture, all_but_first, list}]
     ),
-    %% To make merl parse the pattern we need to make it a valid clause first
-    Clause = merl:quote(Line, ExpandedMerlMacros ++ " -> ok"),
-    %% We format the whole clause, revert merl:quote to their macro form,
-    %% strip that extra body we added and finally compress it into one line.
-    FormattedClause0 = merlin_merl:format(Clause),
-    FormattedClause1 = string:replace(FormattedClause0, "merl:quote", "?Q", all),
-    FormattedClause2 = re:replace(
-        FormattedClause1,
-        " *->\\s+ok\\s+$",
-        "",
-        [multiline]
+    FormattedMacro =
+        case Macro of
+            "Q" ->
+                format(MacroArguments, Options);
+            "QUOTE" ->
+                %% The ?QUOTE needs to be completed with a period, or else
+                %% erlfmt can't parse it.
+                format(MacroArguments ++ ".", Options)
+        end,
+    io:format(
+        "assertMerlMatch failed\nDifference:\n~ts\n", [
+            diff(FormattedMacro, FormattedActual)
+        ]
+    ).
+
+%% @doc Used by `?assertMerlEqual' to print a useful error message on failure.
+print_merl_equal_failure(Expected, Actual, Options) ->
+    FormattedExpected = format_source_lines(Expected, Options),
+    FormattedActual = format_source_lines(Actual, Options),
+    io:format(
+        "assertMerlEqual failed\nDifference:\n~ts\n", [
+            diff(FormattedExpected, FormattedActual)
+        ]
+    ).
+
+format_source_lines(SourceOrNodeOrNodes, Options) ->
+    Source0 = format(SourceOrNodeOrNodes, Options),
+    Source1 = string:trim(Source0),
+    Lines0 = string:split(Source1, <<"\n">>, all),
+    Lines1 = [unicode:characters_to_list([Line, "\n"]) || Line <- Lines0],
+    Lines1.
+
+diff(Expected, Actual) ->
+    lists:map(fun format_diff/1, lists:flatten(diff_words(tdiff:diff(Expected, Actual)))).
+
+diff_words([]) ->
+    [];
+diff_words([{del, Deleted}, {ins, Inserted} | Tail]) ->
+    WordDiff = tdiff:diff(
+        unicode:characters_to_list(Deleted),
+        unicode:characters_to_list(Inserted)
     ),
-    re:replace(FormattedClause2, "\\s+", " ", [multiline]).
+    [ignore_whitespace(WordDiff), diff_words(Tail)];
+diff_words([Edit | Tail]) ->
+    [Edit | diff_words(Tail)].
+
+ignore_whitespace([]) ->
+    [];
+ignore_whitespace([{del, Deleted}, {ins, Inserted} | Tail]) ->
+    case string:trim(Deleted) =:= string:trim(Inserted) of
+        true ->
+            [{eq, Deleted} | ignore_whitespace(Tail)];
+        false ->
+            [{del, Deleted}, {ins, Inserted}, ignore_whitespace(Tail)]
+    end;
+ignore_whitespace([Edit | Tail]) ->
+    [Edit | ignore_whitespace(Tail)].
+
+format_diff({eq, String}) ->
+    String;
+format_diff({del, Deleted}) ->
+    color:on_red(Deleted);
+format_diff({ins, Inserted}) ->
+    case string:trim(Inserted) of
+        "" -> Inserted;
+        _ -> color:on_green(Inserted)
+    end.
 
 %% @doc Returns the given stack trace into something nice, with colors and all.
 %% This makes it more amenable for reading, and also openable in your
@@ -212,66 +308,28 @@ format_using_erl_error(Reason, StackTrace) ->
     ).
 -endif.
 
-%% @doc Renders the given AST using {@link erl_pp} or throws `invalid_form'.
--spec pretty(merlin:ast() | [merlin:ast()]) -> iolist() | no_return().
-pretty(Nodes) when is_list(Nodes) ->
-    lists:map(fun pretty/1, Nodes);
-pretty(Node) ->
-    Columns =
-        case io:columns() of
-            {ok, Value} -> Value;
-            {error, enotsup} -> 120
-        end,
-    Options = [{linewidth, Columns}],
-    Form = merlin:revert(Node),
-    IOList =
-        case erl_syntax:is_form(Form) of
-            true ->
-                erl_pp:form(Form, Options);
-            false ->
-                erl_pp:expr(Form, Options)
-        end,
-    case is_invalid(IOList) of
-        true -> throw(invalid_form);
-        false -> IOList
-    end.
-
 print_stacktrace({current_stacktrace, StackTrace}) ->
     io:format("~s~n", [format_stack(StackTrace)]);
 print_stacktrace(Forms) ->
     {Format, Args} = format_forms(Forms),
     io:format(Format, Args).
 
-is_invalid(IOList) ->
-    foldl_iolist(fun match_prefix/2, "INVALID-FORM", IOList).
+%%% End logging helpers ------------------------------------------------------
 
-match_prefix(_, []) -> true;
-match_prefix(Char, [Char | RestToMatch]) -> RestToMatch;
-match_prefix(_, true) -> true;
-match_prefix(_, _) -> false.
-
-foldl_iolist(_, Result, []) ->
-    Result;
-foldl_iolist(_, Result, <<>>) ->
-    Result;
-foldl_iolist(Fun, AccIn, [Nested | Rest]) when
-    is_list(Nested) orelse is_binary(Nested)
-->
-    AccOut = foldl_iolist(Fun, AccIn, Nested),
-    foldl_iolist(Fun, AccOut, Rest);
-foldl_iolist(Fun, AccIn, Binary) when is_binary(Binary) ->
-    foldl_binary(Fun, AccIn, Binary);
-foldl_iolist(Fun, AccIn, [Char | Rest]) when is_integer(Char) ->
-    AccOut = Fun(Char, AccIn),
-    foldl_iolist(Fun, AccOut, Rest).
-
-foldl_binary(_, Result, <<>>) ->
-    Result;
-foldl_binary(Fun, AccIn, <<Char/utf8>>) ->
-    Fun(Char, AccIn);
-foldl_binary(Fun, AccIn, <<Char/utf8, Rest/binary>>) ->
-    AccOut = Fun(Char, AccIn),
-    foldl_binary(Fun, AccOut, Rest).
+%% @private
+maybe_get_file_attribute(Form) ->
+    case erl_syntax:type(Form) of
+        attribute ->
+            case erl_syntax:atom_value(erl_syntax:attribute_name(Form)) of
+                file ->
+                    [Filename, _Line] = erl_syntax:attribute_arguments(Form),
+                    erl_syntax:string_value(Filename);
+                _ ->
+                    false
+            end;
+        _ ->
+            false
+    end.
 
 %% @doc Splits `List' using `Fun' at the element for which it returns `true'.
 %% That element then returned together with the element in question.
@@ -313,34 +371,22 @@ export_all(Module) when is_atom(Module) ->
     ),
     code:load_binary(Module, Beamfile, Beam1).
 
-%% @doc Works like {@link merl:quote/1}, but also accepts
-%% {@link erl_syntax:string/1. string nodes}. Instead of throwing
-%% `{error, Reason}', it returns a valid
-%% <a href="https://erlang.org/doc/man/erl_parse.html#errorinfo">
-%% error info</a>.
-%%
-%% The first argument is a file string (or node) and is used for the
-%% <a href="https://erlang.org/doc/man/erl_parse.html#errorinfo">`errorinfo'</a>
-quote(File0, Line0, Source0) ->
-    File1 = safe_value(File0),
-    Line1 = safe_value(Line0),
-    Source1 = safe_value(Source0),
-    try merl:quote(Line1, Source1) of
-        AST ->
-            {ok, AST}
-    catch
-        throw:{error, SyntaxError} ->
-            {error, {File1, {Line1, ?MODULE, SyntaxError}}}
-    end.
-
-%% @private
-safe_value(Node) when is_tuple(Node) ->
-    merlin_lib:value(Node);
-safe_value(Value) ->
-    Value.
-
-eunit(Tests) ->
-    eunit:test([
-        {timeout, 60 * 60, Test}
-     || Test <- Tests
-    ]).
+parse(Module) ->
+    CompileOptions = proplists:get_value(options, Module:module_info(compile)),
+    SourceFile = merlin_module:find_source(Module),
+    Options = [
+        {location, {1, 1}},
+        {includes, [Include || {i, Include} <- CompileOptions]},
+        {macros, [
+            case Macro of
+                {d, MacroName} ->
+                    MacroName;
+                {d, MacroName, MacroValue} ->
+                    {MacroName, MacroValue}
+            end
+         || Macro <- CompileOptions,
+            is_tuple(Macro) andalso element(1, Macro) =:= d
+        ]}
+    ],
+    {ok, Forms} = epp:parse_file(SourceFile, Options),
+    Forms.

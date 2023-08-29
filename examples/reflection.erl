@@ -70,7 +70,7 @@ expand_erl_parse_types_transformer(
             continue
     end;
 expand_erl_parse_types_transformer(exit, Form, #{stack := Stack} = State) ->
-    case merlin_lib:get_annotation(Form, expanded, <<>>) of
+    case merlin_annotations:get(Form, expanded, <<>>) of
         <<>> ->
             continue;
         Name ->
