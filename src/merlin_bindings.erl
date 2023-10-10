@@ -89,7 +89,7 @@
 %% can be found.
 %%
 %% @see annotate/2
--spec annotate(merlin:ast()) -> merlin:ast().
+-spec annotate(merlin:ast() | [merlin:ast()]) -> merlin:ast() | [merlin:ast()].
 annotate(Nodes) when is_list(Nodes) ->
     lists:map(fun annotate/1, Nodes);
 annotate(Node) ->
@@ -103,7 +103,7 @@ annotate(Node) ->
 %% point.
 %%
 %% @see erl_syntax_lib:annotate_bindings/2
--spec annotate(merlin:ast(), bindings()) -> merlin:ast().
+-spec annotate(merlin:ast() | [merlin:ast()], bindings()) -> merlin:ast() | [merlin:ast()].
 annotate(Nodes, EnvBindings) when is_list(Nodes) ->
     [annotate(Node, EnvBindings) || Node <- Nodes];
 annotate(Node, EnvBindings) ->
