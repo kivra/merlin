@@ -887,7 +887,12 @@ find_source_test_() ->
                     logger:set_primary_config(LoggerConfig)
                 end,
                 fun() ->
-                    ?assertEqual(ok, file:write_file(filename:join(Ebin, "bad beam module.beam"), <<"garbage">>)),
+                    ?assertEqual(
+                        ok,
+                        file:write_file(
+                            filename:join(Ebin, "bad beam module.beam"), <<"garbage">>
+                        )
+                    ),
                     ?assertError(badfile, find_source('bad beam module'))
                 end
             }

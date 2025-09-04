@@ -103,7 +103,8 @@ annotate(Node) ->
 %% point.
 %%
 %% @see erl_syntax_lib:annotate_bindings/2
--spec annotate(merlin:ast() | [merlin:ast()], bindings()) -> merlin:ast() | [merlin:ast()].
+-spec annotate(merlin:ast() | [merlin:ast()], bindings()) ->
+    merlin:ast() | [merlin:ast()].
 annotate(Nodes, EnvBindings) when is_list(Nodes) ->
     [annotate(Node, EnvBindings) || Node <- Nodes];
 annotate(Node, EnvBindings) ->
@@ -547,7 +548,9 @@ has_test_() ->
         "broken bindings raises an assertion error" => fun() ->
             Variable0 = {var, ?LINE, 'Variable'},
             Variable1 = erl_syntax:set_ann(Variable0, [
-                {env, not_an_ordset}, {bound, [sorted, badly]}, {free, #{"not" => "an ordset"}}
+                {env, not_an_ordset},
+                {bound, [sorted, badly]},
+                {free, #{"not" => "an ordset"}}
             ]),
             ?assertError({assert, _}, has(Variable1)),
             Variable2 = erl_syntax:add_ann({env, []}, Variable1),
