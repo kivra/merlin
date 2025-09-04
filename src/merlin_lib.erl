@@ -111,8 +111,11 @@ find_by(Nodes, Fun) when is_function(Fun, 1) ->
 %% `{error, notfound}' if no such `Node' is found.
 %%
 %% The search is performed recursively.
--spec deep_find_by(merlin:ast() | [merlin:ast()], predicate()) -> {ok, merlin:ast()} | {error, notfound}.
-deep_find_by(Forms0, Predicate) when (is_list(Forms0) orelse is_tuple(Forms0)) andalso is_function(Predicate, 1) ->
+-spec deep_find_by(merlin:ast() | [merlin:ast()], predicate()) ->
+    {ok, merlin:ast()} | {error, notfound}.
+deep_find_by(Forms0, Predicate) when
+    (is_list(Forms0) orelse is_tuple(Forms0)) andalso is_function(Predicate, 1)
+->
     Forms1 = flatten(Forms0),
     try merlin:transform(Forms1, fun find_form_transformer/3, Predicate) of
         _ -> {error, notfound}

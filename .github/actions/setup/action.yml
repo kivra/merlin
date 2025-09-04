@@ -1,0 +1,53 @@
+name: Setup Erlang and Rebar3
+description: |
+  This installs the correct Erlang/OTP and Rebar3 versions, as specified in
+  .tool-versions. It also caches _build for faster runs.
+outputs:
+  cache-hit:
+    description: See https://github.com/actions/cache#outputs
+    value: ${{ steps.cached-deps.outputs.cache-hit }}
+
+runs:
+  using: composite
+  steps:
+    - uses: erlef/setup-beam@v1
+      id: setup-beam
+      with:
+        version-file: .tool-versions
+        version-type: strict
+
+    - name: Fetch dependencies from cache
+      uses: actions/cache@v3
+      id: cached-deps
+      with:
+        path: |
+          _build
+          !_build/*/lib/merlin
+        key: deps-${{ github.ref_name }}-${{ env.OTP_VERSION }}-${{ hashFiles('rebar.*') }}
+        restore-keys: |
+          deps-master-${{ env.OTP_VERSION }}-${{ hashFiles('rebar.*') }}
+          deps-master-${{ env.OTP_VERSION }}-
+      env:
+        OTP_VERSION: ${{ steps.setup-beam.outputs.otp-version }}
+
+    - name: Fetch workspace from cache
+      uses: actions/cache@v3
+      id: cached-workspace
+      with:
+        path: |
+          _build/*/lib/merlin
+        key: workspace-${{ github.ref_name }}-${{ env.OTP_VERSION }}
+      env:
+        OTP_VERSION: ${{ steps.setup-beam.outputs.otp-version }}
+
+    - name: Fetch PLT from cache
+      uses: actions/cache@v3
+      id: cached-plt
+      with:
+        path: |
+          _build/default/*_plt
+        key: dialyzer-${{ github.ref_name }}-${{ env.OTP_VERSION }}
+        restore-keys: |
+          dialyzer-master-${{ env.OTP_VERSION }}
+      env:
+        OTP_VERSION: ${{ steps.setup-beam.outputs.otp-version }}

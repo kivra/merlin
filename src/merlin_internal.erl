@@ -198,7 +198,9 @@ format_source_lines(SourceOrNodeOrNodes, Options) ->
     Lines1.
 
 diff(Expected, Actual) ->
-    lists:map(fun format_diff/1, lists:flatten(diff_words(tdiff:diff(Expected, Actual)))).
+    lists:map(
+        fun format_diff/1, lists:flatten(diff_words(tdiff:diff(Expected, Actual)))
+    ).
 
 diff_words([]) ->
     [];

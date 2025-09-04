@@ -1,0 +1,23 @@
+{
+    "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+    addLabels: ["dependencies"],
+    // Always assign reviewers and assignees even if the PR is to be automerged.
+    assignAutomerge: true,
+    assigneesFromCodeOwners: true,
+    commitBodyTable: true,
+    configMigration: true,
+    extends: [
+        "config:best-practices",
+        // Conventional Commits breaks established commit message conventions.
+        // https://github.blog/2022-06-30-write-better-commits-build-better-projects
+        // https://www.tpope.net
+        ":semanticCommitsDisabled",
+    ],
+    ignorePresets: [
+        ":semanticPrefixFixDepsChoreOthers",
+        ":ignoreModulesAndTests",
+        "abandonments:recommended",
+    ],
+    prCreation: "not-pending",
+    reviewersFromCodeOwners: true,
+}

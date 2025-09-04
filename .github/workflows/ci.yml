@@ -2,143 +2,158 @@ name: Automatic testing
 on: [push]
 concurrency:
   group: ${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  cancel-in-progress: ${{ github.ref != format('refs/heads/{0}', github.event.repository.default_branch || 'master') }}
 env:
-  OTP_VERSION: "25"
-  REBAR3_VERSION: "3.22"
   ERL_FLAGS: "-enable-feature maybe_expr"
 
 jobs:
+  commit-message:
+    name: Check commit messages
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    env:
+      base_ref: ${{ github.base_ref || github.event.repository.default_branch || 'master' }}
+
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      # The `-- .` is to avoid "ambiguous argument" errors from git
+      - name: Find fixup commits
+        run: |
+          echo Please rebase your fixup commits
+
+          git --version
+          git log --exit-code --extended-regexp \
+            --grep "^(fixup|squash|amend)! " \
+            --format="::error title=Must rebase before merge::%s" \
+            origin/${{ env.base_ref }}..${{ github.ref }} \
+            -- .
+
+      - name: Find "conventional commits" style messages
+        run: |
+          echo Conventional Commits breaks established commit message conventions.
+          echo Please follow these guidelines
+          echo
+          echo https://github.blog/2022-06-30-write-better-commits-build-better-projects/
+          echo https://www.tpope.net
+
+          git --version
+          git log --exit-code --extended-regexp --regexp-ignore-case \
+            --grep "^[a-z]+:" \
+            --format="::error title=Must follow commit guidelines, see step output::%s" \
+            origin/${{ env.base_ref }}..${{ github.ref }} \
+            -- .
+
+      - name: Find missing title cased messages
+        run: |
+          git --version
+          ! git log \
+            --format="::error title=Must be properly capitalized::%s" \
+            origin/${{ env.base_ref }}..${{ github.ref }} \
+            -- . \
+          | grep '^::.*::[a-z]'
+
   compile-deps:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      - uses: erlef/setup-beam@v1
         with:
-          otp-version: "${{ env.OTP_VERSION }}"
-          rebar3-version: "${{ env.REBAR3_VERSION }}"
-      - name: Fetch dependencies from cache
-        uses: actions/cache@v3
-        id: cache
-        with:
-          path: |
-            _build/*/*/*
-            ebin
-          key: deps-${{ runner.os }}-${{ env.OTP_VERSION }}-${{ env.REBAR3_VERSION }}-${{ hashFiles('rebar.*') }}
+          fetch-depth: 0
+
+      - uses: ./.github/actions/setup
+        id: setup
+
       - name: Compile deps
-        if: steps.cache.outputs.cache-hit != 'true'
+        if: steps.setup.outputs.cache-hit != 'true'
         run: |
           rebar3 compile --deps_only
           rebar3 as test compile --deps_only
 
   compile:
     needs: [compile-deps]
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      - uses: erlef/setup-beam@v1
         with:
-          otp-version: "${{ env.OTP_VERSION }}"
-          rebar3-version: "${{ env.REBAR3_VERSION }}"
-      - name: Fetch dependencies from cache
-        uses: actions/cache@v3
-        id: cached-deps
-        with:
-          path: |
-            _build/*/*/*
-            ebin
-          key: deps-${{ runner.os }}-${{ env.OTP_VERSION }}-${{ env.REBAR3_VERSION }}-${{ hashFiles('rebar.*') }}
-      - name: Fetch workspace from cache
-        uses: actions/cache@v3
-        id: cached-workspace
-        with:
-          path: |
-            _build/*/*/*
-            ebin
-          key: workspace-${{ github.ref }}
+          fetch-depth: 0
+
+      - uses: ./.github/actions/setup
+
       - name: Compile
         run: |
           rebar3 compile
           rebar3 as test compile
 
-  ct:
-    needs: [compile]
-    runs-on: ubuntu-20.04
+  format:
+    name: Code formatting
+    needs: compile
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+
     steps:
       - uses: actions/checkout@v3
-      - uses: erlef/setup-beam@v1
         with:
-          otp-version: "${{ env.OTP_VERSION }}"
-          rebar3-version: "${{ env.REBAR3_VERSION }}"
-      - name: Fetch workspace from cache
-        uses: actions/cache@v3
-        id: cached-workspace
+          fetch-depth: 0
+
+      - uses: ./.github/actions/setup
+
+      - name: Run erlfmt
+        shell: bash
+        run: |
+          set -o pipefail
+          rebar3 fmt --check --verbose 2>&1 \
+          | sed -E 's/([^:]+):([0-9]+): (.+)/::error file=\1,line=\2::\3/g'
+
+  ct:
+    needs: [compile]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
         with:
-          path: |
-            _build/*/*/*
-            ebin
-          key: workspace-${{ github.ref }}
+          fetch-depth: 0
+
+      - uses: ./.github/actions/setup
+
       - name: Run CT tests
         run: rebar3 ct
 
   eunit:
     needs: [compile]
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      - uses: erlef/setup-beam@v1
         with:
-          otp-version: "${{ env.OTP_VERSION }}"
-          rebar3-version: "${{ env.REBAR3_VERSION }}"
-      - name: Fetch workspace from cache
-        uses: actions/cache@v3
-        id: cached-workspace
-        with:
-          path: |
-           _build/*/*/*
-            ebin
-          key: workspace-${{ github.ref }}
+          fetch-depth: 0
+
+      - uses: ./.github/actions/setup
+
       - name: Run EUnit tests
         run: rebar3 eunit
 
   dialyzer:
     needs: [compile]
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      - uses: erlef/setup-beam@v1
         with:
-          otp-version: "${{ env.OTP_VERSION }}"
-          rebar3-version: "${{ env.REBAR3_VERSION }}"
-      - name: Fetch workspace from cache
-        uses: actions/cache@v3
-        id: cached-workspace
-        with:
-          path: |
-            _build/*/*/*
-            ebin
-          key: workspace-dialyzer-${{ github.ref }}
-          restore-keys:
-            workspace-${{ github.ref }}
+          fetch-depth: 0
+
+      - uses: ./.github/actions/setup
+
       - name: Run Dialyzer
         run: rebar3 dialyzer
 
   xref:
     needs: [compile]
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      - uses: erlef/setup-beam@v1
         with:
-          otp-version: "${{ env.OTP_VERSION }}"
-          rebar3-version: "${{ env.REBAR3_VERSION }}"
-      - name: Fetch workspace from cache
-        uses: actions/cache@v3
-        id: cached-workspace
-        with:
-          path: |
-            _build/*/*/*
-            ebin
-          key: workspace-${{ github.ref }}
+          fetch-depth: 0
+
+      - uses: ./.github/actions/setup
+
       - name: Run xref
         run: rebar3 xref
