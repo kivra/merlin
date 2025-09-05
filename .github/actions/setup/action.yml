@@ -17,7 +17,7 @@ runs:
         version-type: strict
 
     - name: Fetch dependencies from cache
-      uses: actions/cache@v3
+      uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4
       id: cached-deps
       with:
         path: |
@@ -31,7 +31,7 @@ runs:
         OTP_VERSION: ${{ steps.setup-beam.outputs.otp-version }}
 
     - name: Fetch workspace from cache
-      uses: actions/cache@v3
+      uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4
       id: cached-workspace
       with:
         path: |
@@ -41,7 +41,7 @@ runs:
         OTP_VERSION: ${{ steps.setup-beam.outputs.otp-version }}
 
     - name: Fetch PLT from cache
-      uses: actions/cache@v3
+      uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4
       id: cached-plt
       with:
         path: |
