@@ -1,3 +1,6 @@
+> [!IMPORTANT]
+> This project is no longer actively maintained and will be archived.
+
 # merlin
 
 Parse transform library to make writing those a breeze. It builds on top of
