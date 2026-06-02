@@ -1,5 +1,6 @@
 > [!IMPORTANT]
 > This project is no longer actively maintained and will be archived.
+> See https://github.com/maxnordlund/merlin for an up to date fork.
 
 # merlin
 
