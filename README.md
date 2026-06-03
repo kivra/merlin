@@ -1,3 +1,7 @@
+> [!IMPORTANT]
+> This project is no longer actively maintained and will be archived.
+> See https://github.com/maxnordlund/merlin for an up to date fork.
+
 # merlin
 
 Parse transform library to make writing those a breeze. It builds on top of
